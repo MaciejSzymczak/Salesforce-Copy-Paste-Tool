@@ -1,0 +1,990 @@
+<apex:page >
+ <apex:slds />
+
+<!-- 
+ /*  Copy Paste Tool. The fastest way to import your data from Excel
+  * 
+  *  The change history
+  *    2015.04.21 Creation
+  *    2015.12.03 New operation: Delete
+  *    2016.02.10 bugfix: '' is not valid for the type xsd:double
+  *    2016.03.16 bugfix: id value of incorrect type
+  *    2016.03.22 "Insert null values" + map: 4000 chars
+  *    2016.04.29 Copy To Excel
+  *    2017.03.16 External fields
+  *    2017.04.21 External fields- invalid values do not block the deletion (Line ignored)
+  *    2018.03.16 External fields- updates are possible also for NULLs; CPT_Statistics
+  *    2018.05.07 Alert if there is no active template. SOQL Explorer - fields are enclosed by quotes
+  *    2018.07.02 Available in Lightening, Progress Bar, Improved sorting
+  *    2018.07.09 Lightening, more sexy layout
+  *    2018.07.13 NamespacePrefix
+  *    2019.07.29 Action on success/ failure, improved permission sets and page layouts
+  *    2022.03.24 API ver54.0, finer colors
+  *
+  *  @author Maciej Szymczak +48604224658  
+  */
+-->
+
+<apex:form >
+   <div class="bPageTitle">
+       <div class="ptBody">
+           <div class="slds-border_bottom">
+           <table>
+           <tr>
+           <td width="5%">
+           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" id="excel" width="100%" height="40%"><path d="M3.4 0c-1 0-1.9.9-1.9 1.9v20.2c0 1 .9 1.9 1.9 1.9h17.2c1 0 1.9-.9 1.9-1.9V7.6L15.4 0h-12z" fill-rule="evenodd" clip-rule="evenodd" fill="#45B058"></path><path d="M8.8 20.2c-.1 0-.2 0-.2-.1l-1.4-1.8-1.4 1.8c-.1.1-.1.1-.2.1-.2 0-.3-.1-.3-.2s0-.2.1-.2l1.4-1.9-1.3-1.8c-.1-.1-.1-.1-.1-.2s.1-.3.3-.3c.1 0 .1.1.2.1l1.3 1.8 1.3-1.8s.1-.1.2-.1.3.2.3.3c0 .1-.1.1-.1.2l-1.3 1.8L9 19.8l.1.1c0 .2-.2.3-.3.3zm3.7 0h-2c-.2 0-.4-.2-.4-.4v-3.9c0-.1.1-.3.3-.3.1 0 .2.2.2.3v3.8h1.9c.2 0 .3.1.3.2 0 .2-.1.3-.3.3zm2.6.1c-.6 0-1.1-.3-1.5-.6-.1-.1-.1-.1-.1-.2s.1-.3.2-.3.2 0 .2.1c.3.2.8.5 1.3.5.8 0 1-.5 1-.8 0-1.2-2.6-.5-2.6-2.1 0-.8.6-1.3 1.5-1.3.6 0 1.1.2 1.5.5v.2c0 .1-.1.3-.2.3s-.1-.1-.2-.1c-.3-.3-.7-.4-1.1-.4-.6 0-1 .3-1 .7 0 1 2.7.5 2.7 2.1 0 .7-.4 1.4-1.6 1.4z" fill="#fff"></path><path d="M22.5 7.6V8h-4.8s-2.4-.5-2.3-2.5c0 0 .1 2.1 2.2 2.1h4.9z" fill-rule="evenodd" clip-rule="evenodd" fill="#349C42"></path><path d="M15.4 0v5.5c0 .6.4 2.1 2.3 2.1h4.8L15.4 0z" opacity=".5" fill-rule="evenodd" clip-rule="evenodd" fill="#fff"></path></svg>
+           </td>
+           <td width="95%">
+               <h1 class="pageDescription">Copy-paste Tool</h1><br/>
+               <h2 class="pageType">The fastest way to import your data from Excel</h2>
+           </td>
+           </tr>
+           </table>
+           </div>
+       </div>
+   </div>
+    <apex:pagemessages />
+
+</apex:form>
+
+
+<script type="text/javascript"> var __sfdcSessionId = '{!GETSESSIONID()}'; </script>    
+<script src="../../soap/ajax/54.0/connection.js" type="text/javascript"></script>   
+<script>
+    //var NamespacePrefix = sforce.connection.queryAll("SELECT NamespacePrefix FROM Organization").getArray("records")[0].NamespacePrefix+"";
+    //sforce.connection.callOptions= {};
+    //sforce.connection.callOptions.defaultNamespace =NamespacePrefix;
+    //NamespacePrefix = (NamespacePrefix=="null"?"":NamespacePrefix+"__");
+    NamespacePrefix ="";
+</script>   
+
+
+<style>
+    tr.dataRow {
+       background-color:white;
+    }
+    tr.dataRow:hover {
+       background-color: #99CCFF;
+    }
+    button {
+        margin-top: 4px !important; 
+        margin-bottom: 4px !important;
+     }
+</style>
+
+<style>
+
+/* The Modal progress bar 
+How to enable it:
+document.getElementById('myModal').style.display = "block";
+document.getElementById("myBar").style.width = Math.round((currentChunk+1) * 100 / chunks) + '%';
+
+How to disable it:
+document.getElementById('myModal').style.display = "none";
+*/
+.modal {
+    display: none; /* Hidden by default */
+    position: fixed; /* Stay in place */
+    z-index: 1; /* Sit on top */
+    padding-top: 100px; /* Location of the box */
+    left: 0;
+    top: 0;
+    width: 100%; /* Full width */
+    height: 100%; /* Full height */
+    overflow: auto; /* Enable scroll if needed */
+    background-color: rgb(0,0,0); /* Fallback color */
+    background-color: rgba(0,0,0,0.4); /* Black w/ opacity */
+}
+
+/* Modal Content */
+.modal-content {
+    background-color: #fefefe;
+    margin: auto;
+    padding: 20px;
+    border: 1px solid #888;
+    width: 50%;
+}
+
+#myProgress {
+  width: 100%;
+  background-color: #ddd;
+}
+
+#myBar {
+  width: 1%;
+  height: 30px;
+  background-color: #4CAF50;
+}
+
+.loader {
+  border: 16px solid #f3f3f3;
+  border-radius: 50%;
+  border-top: 16px solid #3498db;
+  width: 60px;
+  height: 60px;
+  -webkit-animation: spin 2s linear infinite; /* Safari */
+  animation: spin 2s linear infinite;
+}
+
+/* Safari */
+@-webkit-keyframes spin {
+  0% { -webkit-transform: rotate(0deg); }
+  100% { -webkit-transform: rotate(360deg); }
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+</style>
+
+
+<html>
+<body>
+            <!-- The Modal -->
+            <div id="myModal" class="modal">
+              <!-- Modal content -->
+              <div class="modal-content">
+                <table width="100%">
+                    <tr>
+                         <td>
+                            <div class="loader"></div>
+                         </td>
+                         <td>
+                            <p id="inProgressText">Operation in progress, please wait..</p>
+                            <div id="myProgress">
+                              <div id="myBar"></div>
+                            </div>
+                         </td>
+                    </tr>
+                </table>
+              </div>
+            </div>
+            
+            <div Id="csvArea">  
+            <table>
+            <tr><td></td></tr>
+            <tr><td>
+            <center>
+            <label id="origTextLabel">Paste your excel sheet into this area. Use the clipboard</label><br/>
+            <textarea Id="origText" name="origText" rows="15" cols="40">
+            </textarea>
+            </center>
+            </td></tr>
+            </table>
+            <!-- <button onclick="copyToExcel('a1fw0000003ndxl')">TEST</button> -->
+            </div>
+            <br></br>
+            <div id="myAvailableTemplates"></div>         
+            <div id="tableContainer"></div>             
+                
+            <script>
+               //---------------------------------------------------------------------------------
+                String.prototype.format = function()
+                {
+                  var args = arguments;
+                  return this.replace(/{(\d+)}/g, function(match, number)
+                  {
+                    return typeof args[number] != 'undefined' ? args[number] :
+                                                                '{' + number + '}';
+                  });
+                };    
+
+               //---------------------------------------------------------------------------------
+                String.prototype.replaceAll = function(search, replacement) {
+                    var target = this;
+                    return target.split(search).join(replacement);
+                };                  
+                
+               //---------------------------------------------------------------------------------
+                function addToken (currentLine, currentToken,isfirstEntry) {
+                    if (currentToken==null) currentToken="";
+                    if (currentToken.startsWith('0')) {
+                        currentToken = '="' + currentToken + '"'; 
+                    }
+                    currentToken = currentToken.replaceAll(String.fromCharCode(9), "~tab~");
+                    currentToken = currentToken.replaceAll(String.fromCharCode(13)+String.fromCharCode(10), "~end_of_line~");
+                    currentToken = currentToken.replaceAll(String.fromCharCode(10), "~end_of_line~");
+                    if (isfirstEntry) {
+                        currentLine = currentToken;
+                    } else { 
+                        currentLine=currentLine +String.fromCharCode(9)+ currentToken; 
+                    }
+                    return currentLine;
+                }
+                
+               //---------------------------------------------------------------------------------      
+                function copyDataFromSfdc(id, dynamicWhereClause) {
+                    try {
+                        var resultConf = sforce.connection.queryAll("select Data_Header__c,List_Of_Fields__c,sObjectName__c,Max_Records__c,Where_Clause__c from "+NamespacePrefix+"Copy_Paste_Tool__c where Id='"+id+"'");
+                        var recordsConf = resultConf.getArray("records");  
+                        
+                        var maxRecords = (recordsConf[0].Max_Records__c+"").replace(".0","");
+                        if (maxRecords==null) maxRecords="1000000";
+                        var WhereClause = (recordsConf[0].Where_Clause__c==null?"":recordsConf[0].Where_Clause__c);
+                        if ((dynamicWhereClause+"")!="")
+                            WhereClause = (WhereClause==""?dynamicWhereClause:WhereClause+" and " + dynamicWhereClause);
+                         WhereClause = (WhereClause==""?"":" where "+WhereClause);
+                        
+                        var supressDialogBox = false;
+                        var records=[];                     
+                        var result = sforce.connection.query("select "+recordsConf[0].List_Of_Fields__c.replaceAll("-", "")+" from "+recordsConf[0].sObjectName__c+WhereClause+" limit "+maxRecords);
+                        var queryMore = true;
+                        while (queryMore) {
+                            var recordsChunk = result.getArray("records");
+                            records = records.concat(recordsChunk);
+                            if (!supressDialogBox) {
+                                if (records.length>1999)
+                                    if (!confirm("Number of records is more than :"+records.length+". It may take several minutes to complete operation. Do you wish to continue?")) {break};
+                                supressDialogBox = true;
+                            } 
+                            if (result.getBoolean("done")) {
+                                queryMore = false;
+                            } else {
+                                result = sforce.connection.queryMore(result.queryLocator);
+                            }
+                        }                  
+                        
+                        var currentLine;
+                        var currentToken;
+                        var allLines =recordsConf[0].Data_Header__c;
+                        for (var i=0; i<records.length; i++) {
+                            currentLine = "";
+                            isfirstEntry = true;
+                            var listOfFields  = recordsConf[0].List_Of_Fields__c.replaceAll("-", "").split(',');
+                            for (j = 0; j < listOfFields.length; j++) {                             
+                                currentToken = records[i][listOfFields[j]];
+                                currentLine = addToken(currentLine, currentToken, isfirstEntry);
+                                isfirstEntry=false;
+                            }                       
+                            allLines = allLines + "\n"+ currentLine; 
+                        }
+
+                        resultConf=null;
+                        recordsConf=null;
+                        recordsChunk=null;
+                        records = null;
+                        var input = document.getElementById("origText");
+                        input.value = allLines;
+                        allLines=null;      
+                    } catch (e) {
+                        JavaScriptError(e);
+                    }                   
+                }
+
+               //---------------------------------------------------------------------------------
+                function executeCopy() {
+                    //var input = document.createElement('textarea');
+                    //document.body.appendChild(input);
+                    var input = document.getElementById("origText");                    
+                    //input.value = text;
+                    input.focus();
+                    input.select();
+                    s = document.execCommand('Copy');
+                    if (!s) {
+                        MsgBox("Operation failed, try to use another browser", "Internal error");
+                    } else input.value = '';
+                    //input.remove(); 
+                }    
+                
+               //---------------------------------------------------------------------------------
+                function CustomMsgBoxOk(id, childToRemove) {
+                    var lastNDays = document.getElementById("lastNDays");
+                    var lastNDaysValue = lastNDays.options[lastNDays.selectedIndex].value;
+                    
+                    var searchField = document.getElementById("searchField");
+                    var searchFieldValue = searchField.options[searchField.selectedIndex].value;
+        
+                    var searchValue = document.getElementById("searchValue").value;
+                    
+                    var dynamicWhereClause = "";                    
+                    if (lastNDaysValue!="9999") dynamicWhereClause = "LastModifiedDate = last_n_days:"+lastNDaysValue;
+                    if ((searchValue+"")!="") dynamicWhereClause = (dynamicWhereClause==""?searchFieldValue+" like '"+searchValue+"%'": dynamicWhereClause + " and " + searchFieldValue+" like '"+searchValue+"%'");
+                    
+                    document.body.removeChild(childToRemove);
+                    copyDataFromSfdc(id, dynamicWhereClause);
+                    MsgBox("Done. Open Excel and paste your data", "Data copied to clipboard","executeCopy();");                 
+                }   
+                
+               //---------------------------------------------------------------------------------              
+                function CustomMsgBox(msg, title, id, DataHeader, ListOfFields) {
+
+                    try {
+                        var msgBoxDivStyle = "background: rgba(127, 127, 127, 0.6);height: 100%;position: absolute;width: 100%;z-index: 9999;";
+                        var msgBoxTitleStyle = "background-color: #00478A;color: white;font-size: 20px;font-weight: bold;left: 0px;padding: 4px;text-align: left;top: 0px;";
+                        var msgBoxErrorTitleStyle = "background-color: red;color: white;font-size: 20px;font-weight: bold;left: 0px;padding: 4px;text-align: left;top: 0px;";
+                        var msgBoxSuccessTitleStyle = "background-color: green;color: white;font-size: 20px;font-weight: bold;left: 0px;padding: 4px;text-align: left;top: 0px;";
+                        var msgBoxWarningTitleStyle = "background-color: orange;color: white;font-size: 20px;font-weight: bold;left: 0px;padding: 4px;text-align: left;top: 0px;";
+                        var msgBoxContentsStyle = "background: rgba(255, 255, 255, 1);background-color: white;border: 1px solid black;box-shadow: 6px 6px 6px #070707;";
+                        msgBoxContentsStyle += "left: 30%;position: absolute;resize: vertical;text-align: center;top: 15%;width: 40%;";
+                        var msgBoxTextStyle = "font-size: 18px;overflow: auto;padding: 20px;text-align: center;";
+                        var msgBoxButtonStyle = "margin: 20px;";
+
+                        var msgDiv = "";
+
+                        if (title == null) {
+                            title = "Information";
+                        }
+
+                        titleStyle = msgBoxTitleStyle;
+                        if (title == "Error" || title == "JavaScript Error" || title == "Exception") {
+                            titleStyle = msgBoxErrorTitleStyle;
+
+                        } else if (title == "Success") {
+                            titleStyle = msgBoxSuccessTitleStyle;
+
+                        } else if (title == "Warning") {
+                            titleStyle = msgBoxWarningTitleStyle;
+                        }                       
+                        
+                        msgDiv += "<div id='msgboxDiv' style='" + msgBoxDivStyle + "'>";  // Covers the entire body to prevent any interaction with controls in the body.
+                        msgDiv += "<div id='msgboxContents' style='" + msgBoxContentsStyle + "'>";  // Contains the messagebox itself
+                        msgDiv += "<div id='msgboxTitle' style='" + titleStyle + "'>" + title + "</div>";
+                        msgDiv += "<div id='msgboxText' style='" + msgBoxTextStyle + "'>" + msg + "</div>";  // Contains the text of the message to be displayed.
+                        if (DataHeader!=null) {
+                            msgDiv += "<select id=\"searchField\">";
+                            DataHeaderList = DataHeader.split(',');
+                            ListOfFieldsList = ListOfFields.split(',');
+                            var selected = "  selected";
+                            for (j = 0; j < DataHeaderList.length; j++) { 
+                                msgDiv += "    <option value=\""+ListOfFieldsList[j]+"\""+selected+">"+DataHeaderList[j]+"</option>";
+                                selected = "";
+                            }
+                            msgDiv += "</select> starts with&nbsp;";
+                            msgDiv += "<input type=\"text\" id=\"searchValue\"><br>";
+                            //msgDiv += "<input type=\"checkbox\" id=\"myData\"> My Data only<br>";
+                            msgDiv += "Last modified date: <select id=\"lastNDays\">";
+                            msgDiv += "    <option value=\"1\">1 day ago</option>";
+                            msgDiv += "    <option value=\"2\">2 days ago</option>";
+                            msgDiv += "    <option value=\"3\">3 days ago</option>";
+                            msgDiv += "    <option value=\"4\">4 days ago</option>";
+                            msgDiv += "    <option value=\"5\">5 days ago</option>";
+                            msgDiv += "    <option value=\"6\">6 days ago</option>";
+                            msgDiv += "    <option value=\"7\">7 days ago</option>";
+                            msgDiv += "    <option value=\"14\">14 days ago</option>";
+                            msgDiv += "    <option value=\"30\">30 days ago</option>";
+                            msgDiv += "    <option value=\"90\">90 days ago</option>";
+                            msgDiv += "    <option value=\"180\">180 days ago</option>";
+                            msgDiv += "    <option value=\"365\">Year ago</option>";
+                            msgDiv += "    <option value=\"9999\" selected>All data</option>";
+                            msgDiv += "</select><br>";
+                            msgDiv += "<button class='slds-button slds-button_neutral' id='answerOK' tabindex='1' style='" + msgBoxButtonStyle + "' accesskey='K' onclick='CustomMsgBoxOk(\""+id+"\",this.parentElement.parentElement)'>O<u>K</u></button>";
+                        }
+                        msgDiv += "</div></div>";  // Closes the modalBox and modalDiv tags
+
+                        document.body.insertAdjacentHTML("afterBegin", msgDiv);
+
+                        // This next line is necessary so that the new elements can be referred to in the following JavaScript code.
+                        document.body.focus();
+
+                        // Disable the tab key so that the user can't use it to get to the other controls on the page.
+                        document.getElementById('answerOK').onkeydown = function(e){if(e.keyCode==9){return false;}}
+                        document.getElementById('answerOK').focus();
+
+                    } catch (e) {
+                        JavaScriptError(e);
+                    }
+                }               
+                
+               //---------------------------------------------------------------------------------              
+                function copyToExcel(id, DataHeader, ListOfFields) {
+                    CustomMsgBox("Select filtering criteria or just click OK", "Copy to Excel", id, DataHeader, ListOfFields)
+                }                    
+                
+                //---------------------------------------------------------------------------------
+                function prepareConfTable() {
+                //Patterns for table content
+                var tbl = '<table class="list" border="1" cellpadding="0" cellspacing="0" Id="myTable">{0}{1}</table>';
+                var tb = '<tbody>{0}</tbody>';
+                var tr = '<tr class="dataRow">{0}</tr>';
+                var tdRow = '<td class="dataCell">{0}</td>';
+        
+                var Headertr = '<tr class="headerRow">{0}</tr>';
+                var HeadertdRow = '<td class="headerRow">{0}</td>';
+                
+                var tbCon = '';
+                var trCon = '';     
+               
+                var dmlParameters = "";
+                var result = sforce.connection.query("select Id, Name,Data_Header__c,DML_Operation__c,List_Of_Fields__c,sObjectName__c,Sync_Field__c from "+NamespacePrefix+"Copy_Paste_Tool__c order by Name");
+                var records = result.getArray("records");
+                
+                if (result.size==0) {
+                 MsgBox('No Copy Paste Tool Excel templates were shared with you. Please contact the Administrator','Information',null);
+                }
+                
+                tbCon += HeadertdRow.format('Copy data to Excel');
+                tbCon += HeadertdRow.format('Additional info');
+                tbCon += HeadertdRow.format('Columns');
+                trCon += Headertr.format(tbCon);
+                
+                var ids = "'"+records[0].Id+"'";
+                for (var i=1; i<records.length; i++) {
+                    ids = ids + "," + "'"+records[i].Id+"'";
+                }
+
+                var templatesQueryResult = sforce.connection.query("select Id, ParentId from attachment where ParentId in ("+ids+")");
+                var templates = templatesQueryResult.getArray("records");
+                
+                var templatesMap = {};
+                for (var i=0; i<templates.length; i++) {
+                  templatesMap[templates[i].ParentId] = templates[i];
+                }
+                
+                for (var i=0; i<records.length; i++) {
+                    tbCon = '';                 
+                    tbCon += tdRow.format('<a href="javascript:copyToExcel(\''+records[i].Id+'\',\''+records[i].Data_Header__c.replaceAll(String.fromCharCode(9), ",")+'\',\''+records[i].List_Of_Fields__c.replaceAll("-", "")+'\');">'+records[i].Name+'</a>');                       
+                    if (templatesMap[records[i].Id]!=null)
+                      tbCon += tdRow.format('<a href="/servlet/servlet.FileDownload?file='+templatesMap[records[i].Id].Id+'">Download</a>');
+                    else
+                      tbCon += tdRow.format("");
+                    tbCon += tdRow.format(records[i].Data_Header__c.replaceAll(String.fromCharCode(9), ",&nbsp;&nbsp;&nbsp;&nbsp;"));                       
+                    trCon += tr.format(tbCon);
+                }
+        
+                tb = tb.format(trCon);
+                tbl = tbl.format('', tb);
+                return tbl;             
+                }
+                
+                //---------------------------------------------------------------------------------
+                function displayConfiguration(dataFormat) {
+                document.getElementById("myAvailableTemplates").innerHTML = "";
+                var tbl = prepareConfTable();
+                document.getElementById("tableContainer").innerHTML += "Your data format ("+dataFormat+") is not recognized. Use one of the following<br></br>";  
+                document.getElementById("tableContainer").innerHTML += '<button class="slds-button slds-button_neutral" onclick="location.reload();">&nbsp;&nbsp;<< Back&nbsp;&nbsp;</button>';  
+                document.getElementById("tableContainer").innerHTML += '<button class="slds-button slds-button_neutral" onClick="window.open(&quot;/'+sforce.connection.describeSObject(NamespacePrefix+"Copy_Paste_Tool__c").keyPrefix+'&quot;);">&nbsp;&nbsp;Edit&nbsp;&nbsp;</button>';  
+                document.getElementById("tableContainer").innerHTML += tbl;  
+                }    
+            
+                function getTextAreaSelection(textarea) {
+                    var start = textarea.selectionStart, end = textarea.selectionEnd;
+                    return {
+                        start: start,
+                        end: end,
+                        length: end - start,
+                        text: textarea.value.slice(start, end)
+                    };
+                }
+        
+                function detectPaste(textarea, callback) {
+                    textarea.onpaste = function() {
+                        var sel = getTextAreaSelection(textarea);
+                        var initialLength = textarea.value.length;
+                        window.setTimeout(function() {
+                            var val = textarea.value;
+                            var pastedTextLength = val.length - (initialLength - sel.length);
+                            var end = sel.start + pastedTextLength;
+                            callback({
+                                start: sel.start,
+                                end: end,
+                                length: pastedTextLength,
+                                text: val.slice(sel.start, end)
+                            });
+                        }, 1);
+                    };
+                }
+        
+                //execute me immediately
+                document.getElementById("myAvailableTemplates").innerHTML = 
+                      prepareConfTable()
+                    + '<button class="slds-button slds-button_neutral" onClick="window.open(&quot;/'+sforce.connection.describeSObject(NamespacePrefix+"Copy_Paste_Tool__c").keyPrefix+'&quot;);">&nbsp;&nbsp;Details&nbsp;&nbsp;</button>'
+                    + '<button class="slds-button slds-button_neutral" onClick="window.open(&quot;/'+sforce.connection.describeSObject(NamespacePrefix+"CPT_External_Field__c").keyPrefix+'&quot;);">&nbsp;&nbsp;External Fields&nbsp;&nbsp;</button>'
+                    + '<button class="slds-button slds-button_neutral" onClick="window.open(&quot;/apex/soqlexplorer&quot;);">&nbsp;&nbsp;SOQL Explorer&nbsp;&nbsp;</button>';
+
+                var textarea = document.getElementById("origText");
+                var origTextLabel= document.getElementById("origTextLabel"); 
+                
+                detectPaste(textarea, function(pasteInfo) {
+                    csvArea.style.display = "none";
+                    printTable(pasteInfo);
+                });
+                        
+
+                //---------------------------------------------------------------------------------
+                var errorFlag = false;
+                function chunkDatabase (DMLoperation,syncField,records,offset,statusColumnNo) {
+                    var table = document.getElementById("myTable");
+                    var result;
+                    
+                    try {
+                        if (DMLoperation.toUpperCase()=='UPSERT') {
+                            result = sforce.connection.upsert(syncField, records);
+                        } 
+                        if (DMLoperation.toUpperCase()=='DELETE') {
+                            var ids = [];
+                            for ( var k=0; k<records.length; k++ ) {
+                                if (!records[k].Ignore+''=='true') {
+                                ids.push (records[k].Id);     
+                                }
+                            }
+                            result = sforce.connection.deleteIds(ids);
+                        } 
+                        if (DMLoperation.toUpperCase()=='UPDATE') {
+                            result = sforce.connection.update(records);
+                        }
+                        if (DMLoperation.toUpperCase()=='INSERT') {
+                            result = sforce.connection.insert(records);
+                        }
+
+                        var j=0;
+                        for ( var i = 0; i < records.length; i++ ) {
+                            if (records[i].Ignore+''=='true') {
+                                //this records was ignored, no result for this record (a whole)
+                                j--;
+                            } 
+                            else {
+                                if (result[j].success=="true") {
+                                    table.rows[i+1+offset].cells[statusColumnNo].innerHTML='OK';
+                                    table.rows[i+1+offset].style.backgroundColor = "#C6EFCE"; //GREEN
+                                    table.rows[i+1+offset].style.color = "#006100"; 
+                                }
+                                else {
+                                    table.rows[i+1+offset].cells[statusColumnNo].innerHTML=result[j];
+                                    table.rows[i+1+offset].style.backgroundColor = "#FFC7CE"; //RED
+                                    table.rows[i+1+offset].style.color = "#9C0006"; 
+                                    errorFlag = true;
+                                }
+                            }
+                            j++;
+                        }            
+                      
+                    } catch(err) {
+                        table.rows[1+offset].cells[statusColumnNo].innerHTML="INVALID DATA<BR></BR>" + err.faultstring;
+                        table.rows[1+offset].style.backgroundColor = "#FFC7CE"; //RED
+                        table.rows[1+offset].style.color = "#9C0006";
+                        errorFlag = true;
+                    }                     
+                }
+
+                //---------------------------------------------------------------------------------
+                var chunks = -1;
+                var chunkrecords= [];
+                var chunkoffset= [];
+                function processDatabase (DMLoperation,syncField,statusColumnNo,currentChunk) {
+                    //document.getElementById("inProgressText").innerHTML = "...";
+                    document.getElementById("myBar").style.width = Math.round((currentChunk+1) * 100 / chunks) + '%';
+                    chunkDatabase (DMLoperation,syncField,chunkrecords[currentChunk],chunkoffset[currentChunk],statusColumnNo);
+                    if (currentChunk<chunks) {
+                        setTimeout(
+                            function(){
+                                processDatabase (DMLoperation,syncField,statusColumnNo,++currentChunk);
+                            }
+                        , 1000);
+                    } else {
+                        document.getElementById('myModal').style.display = "none";
+
+                        boe = document.getElementById("ButtonOnError");
+                        bos = document.getElementById("ButtonOnSuccess");
+                        if (errorFlag) {
+                           MsgBox("Review errors in red rows", "Error");
+                           if (boe.innerHTML != "null") {
+                               boe.style.display = ""; //show the button                          
+                                if (boe.value=='true')
+                                    boe.onclick();
+                           }    
+                        } else {
+                            var logRecord = new sforce.SObject(NamespacePrefix+'CPT_Statistics__c');
+                            logRecord.set('Copy_Paste_Tool__c',gconfigurationId);
+                            logRecord.set('Count__c',gcount);
+                            result = sforce.connection.create([logRecord]);
+                            if (!(result[0].success=="true")) {
+                                MsgBox(result[0], "Error");
+                            }
+                            if (bos.innerHTML != "null") {
+                                bos.style.display = ""; //show the button
+                                if (bos.value=='true')
+                                    bos.onclick();
+                            }                           
+                        }
+
+                    }
+                }
+
+                //---------------------------------------------------------------------------------
+                gconfigurationId="";
+                gcount=0;
+                function doDML(configurationId,sobjectName,DMLoperation,syncField,maxRecords,InsertNullValues,listOfFields) {
+                    var exteralId2Id = {}
+                    var efn = sforce.connection.query("select External_Field_Name__c, Field_Name__c, SOQL__c from "+NamespacePrefix+"CPT_External_Field__c");
+                    var efnRecords = efn.getArray("records");
+                    for (var i=0; i<efnRecords.length; i++) {
+                        exteralId2Id[efnRecords[i].External_Field_Name__c.toUpperCase()] = {fieldName: efnRecords[i].Field_Name__c, soql: efnRecords[i].SOQL__c};
+                    }
+                    //exteralId2Id['pmp_Account__r.pmp_SAPNumber__c'.toUpperCase()] = {fieldName:"pmp_Account__c", soql:"select Id from Account where pmp_SAPNumber__c =?"};
+                    //exteralId2Id['pmp_Product__r.External_Id__c'.toUpperCase()] = {fieldName:"pmp_Product__c", soql:" select Id from Product2 where External_Id__c =?"};
+                
+                    document.getElementById("doDMLid").style.display = "none";       
+                    errorFlag = false;
+                    var records = new Array();
+                    var table = document.getElementById("myTable");
+                    var tableArr = [];
+                    var offset = 0;
+                    var currentIndex = 0;
+                    var maxRecordsIsCall = 100;
+                    if (maxRecords<table.rows.length) {
+                        var errMessage ='The number of records exceeded the maximum: {0}. Operation cancelled. Reduce the number of records';
+                        MsgBox(errMessage.format(maxRecords), "Warning");   
+                    }
+                    else 
+                    {
+                        for ( var i = 1; i < table.rows.length; i++ ) {
+                            tableArr.push({
+                                id: table.rows[i].cells[0].innerHTML,
+                                value: table.rows[i].cells[1].innerHTML
+                            });
+                            var record = new sforce.SObject( sobjectName );   
+                            for ( var k=0; k<listOfFields.length; k++ ) {
+                                var fieldName = listOfFields[k];
+                                //ignore not updatable fields (fieldName-)
+                                if (fieldName == listOfFields[k].replaceAll("-", "")) {
+                                    if ((table.rows[i].cells[k].innerHTML=="" || table.rows[i].cells[k].innerHTML.trim()=="")&&(fieldName!=syncField)) {
+                                        if (InsertNullValues) {
+                                            if (exteralId2Id[fieldName.toUpperCase()]==undefined) {
+                                                record.set(fieldName,null);
+                                            } else {
+                                                record.set(exteralId2Id[fieldName.toUpperCase()].fieldName, null);
+                                            }
+                                        }     
+                                    }   
+                                    else { 
+                                        var currentToken=table.rows[i].cells[k].innerHTML.trim();
+                                        currentToken = currentToken.replaceAll("~tab~", String.fromCharCode(9));
+                                        currentToken = currentToken.replaceAll("~end_of_line~", String.fromCharCode(10));
+                                        
+                                        if (exteralId2Id[fieldName.toUpperCase()]==undefined) {
+											if ((fieldName+"").includes(":DATE(DDMMYYYY)")) {
+												// 11/3/2022 --> 2022-03-11
+												fieldName = fieldName.replaceAll(":DATE(DDMMYYYY)","");
+												var chk = currentToken.split("/").reverse();
+												chk[1] = chk[1].padStart(2, '0'); //month
+												chk[2] = chk[2].padStart(2, '0'); //day
+												currentToken = chk.join("-");
+											}
+											if ((fieldName+"").includes(":NUMBER")) {
+												// 11/3/2022 --> 2022-03-11
+												fieldName = fieldName.replaceAll(":NUMBER","");
+												currentToken = currentToken.replaceAll(",","").replaceAll(" ","");
+												if (currentToken == "-") currentToken = null;
+												//alert(fieldName +"    :    "+currentToken );
+											}
+                                            record.set(fieldName,currentToken);
+                                        } else {
+                                            try {
+                                            var tmpSoqlresult = sforce.connection.query( exteralId2Id[fieldName.toUpperCase()].soql.replace("?","'"+currentToken+"'") );
+                                             } catch (e) {
+                                                JavaScriptError(e);
+                                            }              
+                                            var tmpSoqlRecords = tmpSoqlresult.getArray("records");
+                                            if (tmpSoqlRecords.length == 1) {
+                                                record.set(exteralId2Id[fieldName.toUpperCase()].fieldName, tmpSoqlRecords[0].Id);
+                                            } else {
+                                                if (DMLoperation.toUpperCase()=='DELETE') {
+                                                    table.rows[i].cells[listOfFields.length].innerHTML="Line ignored";
+                                                    table.rows[i].style.backgroundColor = "#C6EFCE"; //GREEN
+                                                    table.rows[i].style.color = "#006100";
+                                                    record.set("Ignore","true");
+                                                }
+                                                else {
+                                                    table.rows[i].cells[listOfFields.length].innerHTML="Invalid value: " + currentToken;
+                                                    table.rows[i].style.backgroundColor = "#FFC7CE"; //RED
+                                                    table.rows[i].style.color = "#9C0006"; 
+                                                    errorFlag = true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if (!errorFlag) {
+                                records.push(record);
+                                currentIndex++;                
+                                if (currentIndex>=maxRecordsIsCall) {
+                                  currentIndex = 0;
+                                  chunks++;
+                                  chunkrecords[chunks] = records;
+                                  chunkoffset[chunks] = offset;
+                                  //chunkDatabase (DMLoperation,syncField,records,offset,listOfFields.length);
+                                  offset = offset + maxRecordsIsCall;
+                                  records = [];
+                                }
+                            }
+                        }
+                        if (!errorFlag) { 
+                            chunks++;
+                            chunkrecords[chunks] = records;
+                            chunkoffset[chunks] = offset;
+                            //chunkDatabase (DMLoperation,syncField,records,offset,listOfFields.length);
+                        }
+                        gconfigurationId = configurationId;
+                        gcount           = table.rows.length-1;
+                        //setTimeout is to avoid the message: page unresponsive
+                        document.getElementById('myModal').style.display = "block";
+                        setTimeout(
+                            function(){
+                                var currentChunk = 0;
+                                processDatabase (DMLoperation,syncField,listOfFields.length,currentChunk);
+                            }
+                        , 1000);
+                    }
+                }                         
+                               
+                //---------------------------------------------------------------------------------
+                function printTable(pasteInfo) {
+                    document.getElementById("myAvailableTemplates").innerHTML = "";
+                    //Patterns for table content
+                    var tbl = '<table class="list" border="1" cellpadding="0" cellspacing="0" Id="myTable">{0}{1}</table>';
+                    var tb = '<tbody>{0}</tbody>';
+                    var tr = '<tr class="dataRow">{0}</tr>';
+                    var tdRow = '<td class="dataCell">{0}</td>';
+            
+                    var Headertr = '<tr class="headerRow">{0}</tr>';
+                    var HeadertdRow = '<td class="headerRow">{0}</td>';
+                    
+                    var tbCon = '';
+                    var trCon = '';     
+                    
+                    var tableRows = pasteInfo.text.split('\n');
+                    
+                    //Copy_Paste_Tool__c cpt = New Copy_Paste_Tool__c();
+                    //cpt.Data_Header__c='Sap Account Number  Call Frequency';
+                    //cpt.DML_Operation__c='Upsert';
+                    //cpt.List_Of_Fields__c='SAP_Account_Number__c,Call_Frequency_Cycle__c';
+                    //cpt.sObjectName__c='Account';
+                    //cpt.Sync_Field__c='SAP_Account_Number__c';
+                    //insert cpt;
+                    var dmlParameters = "";
+                    var result = sforce.connection.queryAll("select Id, Data_Header__c,DML_Operation__c,List_Of_Fields__c,sObjectName__c,Sync_Field__c,Max_Records__c,Insert_Null_Values__c,ButtonOnSuccessLabel__c,ButtonOnSuccessAction__c,ButtonOnSuccessRedirect__c,ButtonOnErrorLabel__c,ButtonOnErrorAction__c,ButtonOnErrorRedirect__c  from "+NamespacePrefix+"Copy_Paste_Tool__c where Data_Header__c='"+tableRows[0]+"'");
+                    var records = result.getArray("records");
+                    
+                    if (result.size==0) {
+                        displayConfiguration(tableRows[0]);
+                    }
+                    else
+                    {        
+                        for (var i=0; i<records.length; i++) {
+                        var record = records[i].sObjectName__c;
+                        dmlParameters = '"'+records[i].Id+'","'+records[i].sObjectName__c+'","'+records[i].DML_Operation__c + '","' + records[i].Sync_Field__c + '","' + records[i].Max_Records__c + '",' + records[i].Insert_Null_Values__c +',["'+records[i].List_Of_Fields__c.split(',').join('","')+'"]';
+                        //replace all        
+                        dmlParameters= dmlParameters.split('"').join("&quot;");
+                        ButtonOnSuccessLabel    = records[i].ButtonOnSuccessLabel__c;
+                        ButtonOnSuccessAction   = records[i].ButtonOnSuccessAction__c;
+                        ButtonOnSuccessRedirect = records[i].ButtonOnSuccessRedirect__c;
+                        ButtonOnErrorLabel      = records[i].ButtonOnErrorLabel__c;
+                        ButtonOnErrorAction     = records[i].ButtonOnErrorAction__c;
+                        ButtonOnErrorRedirect   = records[i].ButtonOnErrorRedirect__c;
+                        //console.log(dmlParameters);
+                        }        
+                                
+                        for (i = 0; i < tableRows.length; i++) {            
+                            if (i==0) {
+                                tbCon = '';
+                                var rowCells  = tableRows[i].split( String.fromCharCode(9) );
+                                for (j = 0; j < rowCells.length; j++) { 
+                                tbCon += HeadertdRow.format(rowCells[j]);
+                                }
+                                tbCon += HeadertdRow.format("Status");
+                                trCon += Headertr.format(tbCon);
+                            }
+                            else
+                            {
+                                tbCon = '';
+                                var rowCells  = tableRows[i].split( String.fromCharCode(9) );
+                                //console.log(tableRows[i] + ':' + tableRows[i].length);
+                                if (tableRows[i].length>0) {
+                                  for (j = 0; j < rowCells.length; j++) { 
+                                  tbCon += tdRow.format(rowCells[j]);
+                                  }
+                                  tbCon += tdRow.format("");
+                                  trCon += tr.format(tbCon);
+                                }
+                            }
+                        }
+                        
+                        tb = tb.format(trCon);
+                        tbl = tbl.format('', tb);   
+                        document.getElementById("tableContainer").innerHTML += '<button class="slds-button slds-button_neutral" onclick="location.reload();">&nbsp;&nbsp;<< Back&nbsp;&nbsp;</button>';  
+                        document.getElementById("tableContainer").innerHTML += '<button class="slds-button slds-button_neutral" value="'+ButtonOnSuccessRedirect+'" id="ButtonOnSuccess" onClick="'+ButtonOnSuccessAction+'">'+ButtonOnSuccessLabel+'</button>';  
+                        document.getElementById("tableContainer").innerHTML += '<button class="slds-button slds-button_neutral" value="'+ButtonOnErrorRedirect+'" id="ButtonOnError" onClick="'+ButtonOnErrorAction+'">'+ButtonOnErrorLabel+'</button>';  
+                        document.getElementById("tableContainer").innerHTML += '<button class="slds-button slds-button_neutral" id="doDMLid" onclick="doDML('+dmlParameters+');">&nbsp;&nbsp;Update >>&nbsp;&nbsp;</button>'; 
+                        document.getElementById("ButtonOnSuccess").style.display = "none"; //hide
+                        document.getElementById("ButtonOnError").style.display = "none"; //hide
+                        //console.log('<button class="slds-button slds-button_neutral" id="doDML" onclick="doDML('+dmlParameters+');">&nbsp;&nbsp;Update >>&nbsp;&nbsp;</button>');         
+                        document.getElementById("tableContainer").innerHTML += tbl;  
+                    }
+                }                   
+                
+                //Auxliary libraries. Thank you Matthew G. Collins !
+  
+                /**************************************************************************************************/
+                /* Copyright 2016.  Matthew G. Collins.  All rights reserved.
+                /**************************************************************************************************/
+                /* The functions below are each self-contained and can be copied into any HTML file by themselves
+                /* and used.  The CSS styling is accomplished by using the STYLE attribute on each HTML tag.  There
+                /* is no need to use external CSS.  Of course, once you copy the code you can modify it to suit
+                /* your needs, including changing the styling.  But be careful, especially with the msgBoxDivStyle,
+                /* because some of it is necessary to achieve the desired effect.
+                /*
+                /* You are free to simply copy this JavaScript code into your application, as long as you include
+                /* the copyright notice in each copy of the code you make.  No exceptions.  If you don't, and I
+                /* find out, I'll sue you for enough money to retire on.  Because that's just rude and rude 
+                /* people need to be sued to make the world a better place.  You are also free to modify the code
+                /* to suit your needs.  But if you do, you still need to give me credit.
+                /*
+                /* To see how these functions can be used in practice to give the effect of a modal dialog box
+                /* see the demonstration page at http://www.interbit.com/demos/modal.html.
+                /*
+                /* I recognize that this code could easily have been written more efficiently, and without some of
+                /* the redundancy.  I intentionally wrote it the way I did to make it more easily understandable
+                /* and modifiable to meet your needs.
+                /**************************************************************************************************/
+
+                //-------------------------------------------------------------------------------------------------
+                function MsgBox(msg, title, onOK) {
+
+                    try {
+                        var msgBoxDivStyle = "background: rgba(127, 127, 127, 0.6);height: 100%;position: absolute;width: 100%;z-index: 9999;";
+                        var msgBoxTitleStyle = "background-color: #00478A;color: white;font-size: 20px;font-weight: bold;left: 0px;padding: 4px;text-align: left;top: 0px;";
+                        var msgBoxErrorTitleStyle = "background-color: red;color: white;font-size: 20px;font-weight: bold;left: 0px;padding: 4px;text-align: left;top: 0px;";
+                        var msgBoxSuccessTitleStyle = "background-color: green;color: white;font-size: 20px;font-weight: bold;left: 0px;padding: 4px;text-align: left;top: 0px;";
+                        var msgBoxWarningTitleStyle = "background-color: orange;color: white;font-size: 20px;font-weight: bold;left: 0px;padding: 4px;text-align: left;top: 0px;";
+                        var msgBoxContentsStyle = "background: rgba(255, 255, 255, 1);background-color: white;border: 1px solid black;box-shadow: 6px 6px 6px #070707;";
+                        msgBoxContentsStyle += "left: 30%;position: absolute;resize: vertical;text-align: center;top: 15%;width: 40%;";
+                        var msgBoxTextStyle = "font-size: 18px;overflow: auto;padding: 20px;text-align: center;";
+                        var msgBoxButtonStyle = "margin: 20px;";
+
+                        var msgDiv = "";
+
+                        if (title == null) {
+                            title = "Information";
+                        }
+
+                        if (onOK == null) {
+                            onOK = "";
+                        }
+
+                        titleStyle = msgBoxTitleStyle;
+                        if (title == "Error" || title == "JavaScript Error" || title == "Exception") {
+                            titleStyle = msgBoxErrorTitleStyle;
+
+                        } else if (title == "Success") {
+                            titleStyle = msgBoxSuccessTitleStyle;
+
+                        } else if (title == "Warning") {
+                            titleStyle = msgBoxWarningTitleStyle;
+                        }                       
+                        
+                        msgDiv += "<div id='msgboxDiv' style='" + msgBoxDivStyle + "'>";  // Covers the entire body to prevent any interaction with controls in the body.
+                        msgDiv += "<div id='msgboxContents' style='" + msgBoxContentsStyle + "'>";  // Contains the messagebox itself
+                        msgDiv += "<div id='msgboxTitle' style='" + titleStyle + "'>" + title + "</div>";
+                        msgDiv += "<div id='msgboxText' style='" + msgBoxTextStyle + "'>" + msg + "</div>";  // Contains the text of the message to be displayed.
+                        msgDiv += "<button id='answerOK' tabindex='1' style='" + msgBoxButtonStyle + "' accesskey='K' onclick='" + onOK + "document.body.removeChild(this.parentElement.parentElement);'>O<u>K</u></button>";
+                        msgDiv += "</div></div>";  // Closes the modalBox and modalDiv tags
+
+                        document.body.insertAdjacentHTML("afterBegin", msgDiv);
+
+                        // This next line is necessary so that the new elements can be referred to in the following JavaScript code.
+                        document.body.focus();
+
+                        // Disable the tab key so that the user can't use it to get to the other controls on the page.
+                        document.getElementById('answerOK').onkeydown = function(e){if(e.keyCode==9){return false;}}
+                        document.getElementById('answerOK').focus();
+
+                    } catch (e) {
+                        JavaScriptError(e);
+                    }
+                }
+
+
+                //-------------------------------------------------------------------------------------------------
+                function YesNo(msg, title, onYes, onNo) {
+
+                    try {
+                        var msgBoxDivStyle = "background: rgba(127, 127, 127, 0.6);height: 100%;position: absolute;width: 100%;z-index: 9999;";
+                        var msgBoxTitleStyle = "background-color: #00478A;color: white;font-size: 20px;font-weight: bold;left: 0px;padding: 4px;text-align: left;top: 0px;";
+                        var msgBoxErrorTitleStyle = "background-color: red;color: white;font-size: 20px;font-weight: bold;left: 0px;padding: 4px;text-align: left;top: 0px;";
+                        var msgBoxSuccessTitleStyle = "background-color: green;color: white;font-size: 20px;font-weight: bold;left: 0px;padding: 4px;text-align: left;top: 0px;";
+                        var msgBoxWarningTitleStyle = "background-color: orange;color: white;font-size: 20px;font-weight: bold;left: 0px;padding: 4px;text-align: left;top: 0px;";
+                        var msgBoxContentsStyle = "background: rgba(255, 255, 255, 1);background-color: white;border: 1px solid black;box-shadow: 6px 6px 6px #070707;";
+                        msgBoxContentsStyle += "left: 30%;position: absolute;resize: vertical;text-align: center;top: 15%;width: 40%;";
+                        var msgBoxTextStyle = "font-size: 18px;overflow: auto;padding: 20px;text-align: center;";
+                        var msgBoxButtonStyle = "margin: 20px;";
+
+                        var msgDiv = "";
+
+                        if (title == null) {
+                            title = "Confirm";
+                        }
+
+                        if (onYes == null) {
+                            onYes = "";
+                        }
+
+                        if (onNo == null) {
+                            onNo = "";
+                        }
+
+                        msgDiv += "<div id='msgboxDiv' style='" + msgBoxDivStyle + "'>";  // Covers the entire body to prevent any interaction with controls in the body.
+                        msgDiv += "<div id='msgboxContents' style='" + msgBoxContentsStyle + "'>";  // Contains the messagebox itself
+                        msgDiv += "<div id='msgboxTitle' style='" + msgBoxTitleStyle + "'>" + title + "</div>";
+                        msgDiv += "<div id='msgboxText' style='" + msgBoxTextStyle + "'>" + msg + "</div>";  // Contains the text of the message to be displayed.
+                        msgDiv += "<button id='answerYes' tabindex='1' style='" + msgBoxButtonStyle + "' accesskey='Y' onclick='" + onYes + "document.body.removeChild(this.parentElement.parentElement);'><u>Y</u>es</button>";
+                        msgDiv += "<button id='answerNo' tabindex='2' style='" + msgBoxButtonStyle + "' accesskey='N' onclick='" + onNo + "document.body.removeChild(this.parentElement.parentElement);'><u>N</u>o</button>";
+                        msgDiv += "</div></div>";  // Closes the modalBox and modalDiv tags
+
+                        document.body.insertAdjacentHTML("afterbegin", msgDiv);
+
+                        // This next line is necessary so that the new elements can be referred to in the following JavaScript code.
+                        document.body.focus();
+
+                        // Intercept the tab key so that the user can't use it to get to the other controls on the page.
+                        document.getElementById('answerYes').onkeydown = function(e){if(e.keyCode==9){document.getElementById('answerNo').focus();return false;}}
+                        document.getElementById('answerNo').onkeydown = function(e){if(e.keyCode==9){document.getElementById('answerYes').focus();return false;}}
+
+                        // Put the user's focus on the Yes button.
+                        document.getElementById('answerYes').focus();
+
+                    } catch (e) {
+                        JavaScriptError(e);
+                    }
+                }
+
+                //-------------------------------------------------------------------------------------------------
+                function JavaScriptError(e) {
+
+                    var msg = "";
+
+                    try {
+                        if (e.name ==undefined) {
+                            msg = e;
+                        } else {
+                            msg = e.name + "<br /><br />" + e.message + "<br /><br />" + e.stack;
+                        }
+
+                    } catch (e) {
+                        msg = e.message;
+                    }
+
+                    try {
+                        MsgBox(msg, "JavaScript Error");
+
+                    } catch (e1) {
+                        alert(msg);
+                    }
+                }
+
+
+                //-------------------------------------------------------------------------------------------------
+                function jsonError(err) {
+                    msg = "Error " + err.errNumber + "<br /><br />";
+                    msg += err.errMessage + "<br /><br />";
+                    MsgBox(msg, "Exception");
+                }
+
+
+  </script>        
+</body>
+</html>
+
+</apex:page>

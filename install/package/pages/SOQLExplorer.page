@@ -1,0 +1,636 @@
+<apex:page lightningstylesheets="true">
+
+<apex:slds />  
+
+<!-- 
+     SOQLExplorer
+        Pass default SOQL and headers in URL and turn the window into nice looking report, for instance: 
+                 https://<your domain>/apex/SOQLExplorer?q=select Name from account limit 1&header=My first report
+
+     @author Maciej Szymczak, All rights reserved
+     @version 2024.08  SetupAuditTrail, Create URL, flatView, Count
+-->
+
+<!-- DECLARATIONS START -->
+
+<script src="../../soap/ajax/60.0/connection.js"></script> 
+
+<style>
+    tr.dataRow {
+       background-color:white;
+    }
+    tr.dataRow:hover {
+       background-color: #99CCFF;
+    };
+    
+    
+#wrapper {
+    width: 500px;
+    overflow: hidden; /* will contain if #first is longer than #second */
+}
+#first {
+    width: 200px;
+    float:left; /* add this */
+}
+#second {
+    overflow: hidden; /* if you don't want #second to wrap below #first */
+}
+    
+</style>
+
+
+    <script>
+
+		String.prototype.format = function() {
+		  var args = arguments;
+		  return this.replace(/{(\d+)}/g, function(match, number)
+		  {
+			return typeof args[number] != 'undefined' ? args[number] :
+														'{' + number + '}';
+		  });
+		};
+
+        itemsToHide = ['type'];
+        fineLabels = {"OldValue":"NewValue"};
+        fieldSeparator = '';
+        
+		function flattenJSON(data) {
+			let result = [];
+
+			data.forEach(item => {
+				let flatItem = {};
+				flattenHelper(item, flatItem, '');
+				result.push(flatItem);
+			});
+
+			return result;
+		}
+
+		function flattenHelper(current, flatItem, prefix) {
+			for (let key in current) {
+				if (current.hasOwnProperty(key)) {
+					let value = current[key];
+					let newKey = prefix ? `${prefix}.${key}` : key;
+
+					if (value && typeof value === 'object' && !Array.isArray(value)) {
+						flattenHelper(value, flatItem, newKey);
+					} else {
+						flatItem[newKey] = value;
+					}
+				}
+			}
+		}				
+		
+		/**
+		 * @author Maciej Szymczak, based on Json-to-HTML-Table-master by Afshin Mehrabani
+		 */
+		var rowCount;
+        function ConvertJsonToTable(xparsedJson, tableId, tableClassName, linkText, csvMode,recurrence)
+        {
+			rowCount = 0; 
+            //Patterns for links and NULL value
+            var italic = '<i>{0}</i>';
+            var link = linkText ? '<a href="{0}">' + linkText + '</a>' :
+                                  '<a href="{0}">{0}</a>';
+
+            //Pattern for table
+            var idMarkup = tableId ? ' id="' + tableId + '"' :
+                                     '';
+
+            var classMarkup = tableClassName ? ' class="' + tableClassName + '"' :
+                                               '';
+
+            var tbl = '<table class="list" border="1" cellpadding="0" cellspacing="0"' + idMarkup + classMarkup + '>{0}{1}</table>';
+            //Patterns for table content
+            var th = '<thead>{0}</thead>';
+            var tb = '<tbody>{0}</tbody>';
+            var tr = '<tr class="dataRow">{0}</tr>';
+            var thRow = '<th class="headerRow">{0}</th>';
+            var tdRow = '<td class="dataCell">{0}</td>';
+            var thCon = '';
+            var tbCon = '';
+            var trCon = '';
+            if (csvMode) {
+                italic = '{0}';
+                tbl = '{0}{1}';
+                //Patterns for table content
+                th = '{0}';
+                tb = '{0}';
+                tr = '{0}'; 
+                thRow = '"{0}"'+fieldSeparator;
+                tdRow = '"{0}"'+fieldSeparator;
+                thCon = '';
+                tbCon = '';
+                trCon = '';
+            }
+
+            //Maciej Szymczak: Process data even for single object (not a list)
+            var opaqueObject = [];
+            var parsedJson;
+            if (typeof(xparsedJson[0])=='undefined') {
+              opaqueObject.push(xparsedJson);
+              parsedJson  = opaqueObject;
+            }
+            else
+              parsedJson = xparsedJson;
+
+            if (parsedJson)
+            {
+                var isStringArray = typeof(parsedJson[0]) == 'string';
+                var headers;
+
+                // Create table headers from JSON data
+                // If JSON data is a simple string array we create a single table header
+                if(isStringArray)
+                    thCon += thRow.format('value');
+                else
+                {
+                    // If JSON data is an object array, headers are automatically computed
+                    if(typeof(parsedJson[0]) == 'object')
+                    {
+                        headers = array_keys(parsedJson[0]);
+                        for ( key in itemsToHide ) {
+                        index = headers.indexOf(itemsToHide[key]);
+                        if (index!=-1) headers.splice(index,1);
+                        }
+
+                        for (i = 0; i < headers.length; i++) {
+                           var fineLabel = fineLabels[headers[i]];
+                           if (!fineLabel)
+                               fineLabel = headers[i];
+                           thCon += thRow.format(fineLabel);
+                        }
+                    }
+                }
+                if (csvMode) thCon = thCon.substring(0, thCon.length - 1); //truncate last comma
+                th = th.format(tr.format(thCon))+(recurrence?'':'\r\n');
+
+                // Create table rows from Json data
+                if(isStringArray)
+                {
+                    for (var i = 0; i < parsedJson.length; i++)
+                    {
+                        tbCon += tdRow.format(parsedJson[i]);
+                        if (csvMode) tbCon = tbCon.substring(0, tbCon.length - 1); //truncate last comma
+                        trCon += tr.format(tbCon)+(recurrence?'':'\r\n');
+						rowCount++;
+                        tbCon = '';
+                    }
+                }
+                else
+                {
+                    if(headers)
+                    {
+                        var urlRegExp = new RegExp(/(\b(https?|ftp|file):\/\/[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])/ig);
+                        var javascriptRegExp = new RegExp(/(^javascript:[\s\S]*;$)/ig);
+
+                        //Maciej Szymczak: missing var added
+                        for (var i = 0; i < parsedJson.length; i++)
+                        {
+                            //Maciej Szymczak: missing var added
+                            for (var j = 0; j < headers.length; j++)
+                            {
+                                try {
+                                var value = parsedJson[i][headers[j]];
+
+                                var isUrl = urlRegExp.test(value) || javascriptRegExp.test(value);
+
+                                if(isUrl)   // If value is URL we auto-create a link
+                                    tbCon += tdRow.format(link.format(value));
+                                else
+                                {
+                                    if(value){
+                                        if(typeof(value) == 'object'){
+                                            //for supporting nested tables
+                                            //Maciej Szymczak: I deleted value.data as it was not generic thing
+                                            tbCon += tdRow.format(ConvertJsonToTable(value,'','','',csvMode,true));
+                                        } else {
+                                            tbCon += tdRow.format(value);
+                                        }
+
+                                    } else {    // If value == null we format it like PhpMyAdmin NULL values
+                                        tbCon += tdRow.format(italic.format(value).toUpperCase());
+                                    }
+                                }
+                                } catch(err) {
+                                    //tbCon += tdRow.format("error:"+headers[j]+" "+parsedJson);
+                                }
+                            }
+                            if (csvMode) tbCon = tbCon.substring(0, tbCon.length - 1); //truncate last comma
+                            trCon += tr.format(tbCon)+(recurrence?'':'\r\n');
+							rowCount++;
+                            tbCon = '';
+
+                        }
+                    }
+                }
+                tb = tb.format(trCon);
+                tbl = tbl.format(th, tb);
+
+                return tbl;
+            }
+            return null;
+        }
+
+        function array_keys(input, search_value, argStrict)
+        {
+            var search = typeof search_value !== 'undefined', tmp_arr = [], strict = !!argStrict, include = true, key = '';
+
+            if (input && typeof input === 'object' && input.change_key_case) { // Duck-type check for our own array()-created PHPJS_Array
+                return input.keys(search_value, argStrict);
+            }
+
+            for (key in input)
+            {
+                if (input.hasOwnProperty(key))
+                {
+                    include = true;
+                    if (search)
+                    {
+                        if (strict && input[key] !== search_value)
+                            include = false;
+                        else if (input[key] != search_value)
+                            include = false;
+                    }
+                    if (include)
+                        tmp_arr[tmp_arr.length] = key;
+                }
+            }
+            return tmp_arr;
+        }
+
+	/*
+    function SOQLToTable (query, itemsToHide, fineLabels ) {
+
+        xparsedJson= sforce.connection.query(query);
+        if (xparsedJson.size!=0) {
+        //return query+"<br></br>Result:"+xparsedJson+"<br></br>"+ConvertJsonToTable(xparsedJson.records)
+        return '<div class="datagrid">'+ConvertJsonToTable(flattenJSON(xparsedJson.records))+'</div>'
+        }
+        else {
+        //return query+"<br></br>Result:"+"*** No records found"
+        return "*** No records found"
+        }
+    }
+	*/
+    
+    //textArea functions. source: http://help.dottoro.com/ljtfkhio.php
+    function GetSelection (textareaId) {
+        var selection = "";
+
+        var textarea = document.getElementById(textareaId);
+        if ('selectionStart' in textarea) {
+                // check whether some text is selected in the textarea
+            if (textarea.selectionStart != textarea.selectionEnd) {
+                selection = textarea.value.substring  (textarea.selectionStart, textarea.selectionEnd);
+            }
+        }
+        else {  // Internet Explorer before version 9
+            var textRange = document.selection.createRange ();
+            var rangeParent = textRange.parentElement ();
+            if (rangeParent === textarea) {
+                selection = textRange.text;
+            }
+        }
+
+        if (selection == "") {
+            return textarea.value;
+        }
+        else {
+            return selection;
+        }
+    }
+    
+    function ModifySelection (textareaId, newText) {
+        var textarea = document.getElementById(textareaId);
+        if ('selectionStart' in textarea) {
+                // check whether some text is selected in the textarea
+            if (textarea.selectionStart != textarea.selectionEnd) {
+                var updatedText = textarea.value.substring (0, textarea.selectionStart) + 
+                    newText +
+                    textarea.value.substring (textarea.selectionEnd);
+                textarea.value = updatedText;
+            } else {
+                textarea.value = newText;
+            }
+        }
+        else {  // Internet Explorer before version 9
+                // create a range from the current selection
+            var textRange = document.selection.createRange ();
+                // check whether the selection is within the textarea
+            var rangeParent = textRange.parentElement ();
+            if (rangeParent === textarea) {
+                textRange.text = newText;
+            } else {
+                textarea.value = newText;
+            }
+        }
+    }
+
+    </script>
+    
+
+<!-- DECLARATIONS END -->
+
+    <script>
+        sforce.connection.sessionId = "{!$Api.Session_ID}";
+        function download(data, filename, type) {
+        var a = document.createElement("a"),
+            file = new Blob([data], {type: type});
+        if (window.navigator.msSaveOrOpenBlob) // IE10+
+            window.navigator.msSaveOrOpenBlob(file, filename);
+        else { // Others
+            var url = URL.createObjectURL(file);
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(function() {
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);  
+            }, 0); 
+        }
+        }
+        
+        function getCommaSeparatedFields (objectName, creatableOnly, customFieldsOnly) {
+            commaSeparatedFields = '';
+            descObject=sforce.connection.describeSObjects([objectName]);
+            for (cnt in descObject[0].fields) {
+              console.log('LOG:'+descObject[0].fields[cnt].name + '    '+ descObject[0].fields[cnt].custom);
+              if (creatableOnly) if (descObject[0].fields[cnt].createable=='false') continue;
+              if (customFieldsOnly) if (descObject[0].fields[cnt].custom=='false') { console.log('NOT CUSTOM:'+descObject[0].fields[cnt].name);  continue; }
+              commaSeparatedFields = commaSeparatedFields + descObject[0].fields[cnt].name + ',';
+            }
+            return commaSeparatedFields.substring(0,commaSeparatedFields.length-1);
+        }
+
+        function generateURL(textareaId) {
+                var URL = '/apex/SOQLExplorer?header=Report&q='+encodeURIComponent(GetSelection(textareaId))+'&flatView='+(document.getElementById('flatView').checked?'true':'false');
+                window.open(URL);
+        }
+
+        function downloadMySOQL(textareaId, pfieldSeparator) {
+            try {
+                var mySOQL = GetSelection(textareaId);
+                
+                //replace 'select * from contact' with 'select <column names> from contact'
+                if (mySOQL.toLowerCase().startsWith('select * from')) {
+                    var fromStr = mySOQL.substring(14,65000)+' ';
+                    var n = fromStr.indexOf(" ");
+                    var objectName = fromStr.substring(0,n);
+                    var restSOQL = fromStr.substring(n,65000);
+                    if (restSOQL.toLowerCase().indexOf('limit')==-1) {
+                        restSOQL = restSOQL + 'limit 200';
+                    }
+                    mySOQL = 'select ' + getCommaSeparatedFields(objectName, false, false) + ' from ' + objectName+ restSOQL;
+                    //ModifySelection(textareaId, mySOQL);
+                }
+                
+                myJsonString = '';
+                //check if the string is either SOQL or JSON
+                if (mySOQL[0] == "[" || mySOQL[0] == "{" ) {
+                  myJsonString = mySOQL;
+                } else {
+                  var records=[];
+                  var result = sforce.connection.query(mySOQL);
+                  var queryMore = true;
+                  while (queryMore) {
+                      var recordsChunk = result.getArray("records");
+                      records = records.concat(recordsChunk);
+                      if (result.getBoolean("done")) {
+                          queryMore = false;
+                      } else {
+                          result = sforce.connection.queryMore(result.queryLocator);
+                      }
+                  }
+                  myJsonString = JSON.stringify(records);
+                }
+                
+                recordset = JSON.parse(myJsonString);
+                //print (recordset);
+                fieldSeparator = pfieldSeparator;
+                data = ConvertJsonToTable (recordset,'','','',true);
+                filename = 'dummy.txt';
+                type = 'text/plain';
+				
+				if (pfieldSeparator=='JSON') {
+					data = myJsonString;
+				}
+				if (pfieldSeparator=='nodownload') {
+					var flatView = document.getElementById('flatView').checked;
+					if (flatView) {
+						data = ConvertJsonToTable ( flattenJSON(recordset));						
+					} else {
+					  data = ConvertJsonToTable ( recordset );
+					}
+				}
+				
+                if (pfieldSeparator!='nodownload') {
+                  download(data, filename, type);
+                }
+                document.getElementById('divDescribeGlobal').innerHTML = data + '<br/>Count:'+rowCount;
+                }
+            catch(err)
+            {
+                document.getElementById('divDescribeGlobal').innerHTML = err;
+            }
+        } 
+            
+        function userInfo() {
+            var dg = sforce.connection.getUserInfo();    
+            document.getElementById('divDescribeGlobal').innerHTML = '<div class="datagrid">'+ConvertJsonToTable(dg)+'</div>';
+        }
+
+        function describeGlobal () {
+            var dg = sforce.connection.describeGlobal();    
+            document.getElementById('divDescribeGlobal').innerHTML = '<div class="datagrid">'+ConvertJsonToTable(dg.sobjects)+'</div>';
+        }
+
+            
+
+        function describeObject () {
+            objectName=document.getElementById('objectName').value.trim();
+            var res= sforce.connection.describeSObjects([objectName]);
+            document.getElementById('divDescribeGlobal').innerHTML = '<div class="datagrid">'+ConvertJsonToTable(res)+'</div>';
+        }
+
+        function describeObjectFields () {
+            objectName=document.getElementById('objectName').value.trim();
+            var res= (sforce.connection.describeSObjects([objectName]))[0].fields;    
+            document.getElementById('divDescribeGlobal').innerHTML = '<div class="datagrid">'+ConvertJsonToTable(res)+'</div>';
+        }
+        
+        function childRelationships () {
+            objectName=document.getElementById('objectName').value.trim();
+            var res= (sforce.connection.describeSObjects([objectName]))[0].childRelationships;    
+            document.getElementById('divDescribeGlobal').innerHTML = '<div class="datagrid">'+ConvertJsonToTable(res)+'</div>';
+        }
+        
+        function recordTypeInfos () {
+            objectName=document.getElementById('objectName').value.trim();
+            var res= (sforce.connection.describeSObjects([objectName]))[0].recordTypeInfos;    
+            document.getElementById('divDescribeGlobal').innerHTML = '<div class="datagrid">'+ConvertJsonToTable(res)+'</div>';
+        }
+        
+        
+        function CommaSeparatedFields (creatableOnly, customFieldsOnly) {
+            objectName=document.getElementById('objectName').value.trim();
+            var res= getCommaSeparatedFields(objectName, creatableOnly, customFieldsOnly);    
+            document.getElementById('divDescribeGlobal').innerHTML = '<div class="datagrid">select '+res+' from '+document.getElementById('objectName').value+'</div>';
+        }
+        
+        function openInNewTab(url) {
+          var win = window.open(url, '_blank');
+          win.focus();
+        }
+
+function executeSelect() {
+    switch (document.getElementById('select').selectedIndex)
+        {
+           case 1: describeObject(); break;
+           case 2: describeObjectFields(); break;
+           case 3: childRelationships(); break;
+           case 4: CommaSeparatedFields(false,false); break;
+           case 5: CommaSeparatedFields(true,false); break;
+           case 6: CommaSeparatedFields(false,true); break;
+           case 7: recordTypeInfos(); break;
+           default: 
+               alert('Default case'); break;
+        }
+	document.getElementById('select').selectedIndex = 0;	
+}
+
+function otherActions() {
+    switch (document.getElementById('otherActions').selectedIndex)
+        {
+           case 1: downloadMySOQL('SOQLExp',','); break;
+           case 2: downloadMySOQL('SOQLExp',String.fromCharCode(9)); break;
+           case 3: downloadMySOQL('SOQLExp','JSON'); break;
+           case 5: describeGlobal(); break;
+           case 6: openInNewTab('/soap/ajax/60.0/debugshell.html'); break;
+           case 7: userInfo (); break;
+
+           //default: 
+           //    alert('Default case'); break;
+        }
+        document.getElementById('otherActions').selectedIndex = 0;
+}
+
+
+</script>
+
+
+<body>
+<div class="slds-scope">
+    <div id="header" class="slds-notify slds-notify_alert slds-theme_alert-texture slds-theme_info" role="alert">
+      <h2>SOQL Explorer - unleash the power of SOQL. &nbsp;&nbsp;&nbsp; Build 2024.07&nbsp;&nbsp;&nbsp;</h2>
+      <h3>@author &nbsp;<a href="https://www.linkedin.com/in/maciej-szymczak-a818a011/">Maciej Szymczak</a></h3>
+    </div>
+    
+<textarea class="slds-textarea" Id="SOQLExp" rows="10" cols="80" style="width:100%; font-family:'Courier New'">
+Select the query and hit the button Run. The wildcard * is supported!
+
+select * from RecordType
+select Id, FIELDS(CUSTOM) from Account limit 1
+select Id, Name, userName, lastloginDate, createdDate, isActive from User where  isActive = true and Profile.UserLicense.Name = 'Salesforce' order by LastLoginDate desc, createdDate limit 100
+select Id, Name, (select id, FirstName, LastName from Contacts limit 2) from Account limit 10
+select Id, FirstName, LastName, (select Id from Tasks) from Contact limit 2
+select Id, Name, account.owner.Name from Contact limit 2
+
+--New accounts Y2Y
+Select count(Id) Accounts, Calendar_Year(CreatedDate) Yearly from Account where CreatedDate = last_n_days:1500 group by Calendar_Year(CreatedDate) order by Calendar_Year(CreatedDate)
+
+--Accounts by Owners
+Select count(Id) Accounts, OwnerId, Owner.IsActive, Owner.Name, Owner.Profile.Name Profile from Account group by OwnerId, Owner.IsActive, Owner.Name, Owner.Profile.Name order by count(Id) desc
+
+--Leads, Opportunities
+select Id, Email, Country, Company, IsConverted, ConvertedContactId, ConvertedAccountId, ConvertedOpportunityId, ConvertedDate, Status, RecordType.Name  from Lead order by createdDate desc limit 100
+select Id, Name, IsClosed, IsWon, Amount, PriceBook2Id, PriceBook2.Name  from Opportunity order by createdDate desc limit 100
+select Id, OpportunityId, PriceBookEntryId, PriceBookEntry.Product2.Name  from OpportunityLineItem order by createdDate desc limit 100
+
+--SetupAuditTrail
+SELECT Action, CreatedById, CreatedDate, DelegateUser, Display, Id, Section 
+FROM SetupAuditTrail 
+WHERE CreatedBy.Name = 'Maciej Szymczak' AND CreatedDate = Last_n_Days:1
+ORDER BY CreatedDate DESC NULLS FIRST LIMIT 1000
+
+--Event log (logins, logouts etc within last 24 hours / 30 days)
+select * from EventLogFile limit 5
+
+-- Batch consumption
+SELECT ApexClass.Name, sum(TotalJobItems)
+FROM AsyncApexJob 
+WHERE JobType != 'BatchApexWorker' 
+AND CreatedDate = today
+Group by ApexClass.Name 
+order by sum(TotalJobItems)desc
+--AND CreatedDate &gt;= 2020-01-29T00:00:00.000Z and CreatedDate &lt; 2020-01-29T23:59:59.000Z 
+
+--Debug approval process
+SELECT Id,TargetObjectid, Status,(select id,actor.name from Workitems),(SELECT Id, StepStatus, Comments,Actor.Name FROM Steps) FROM ProcessInstance where TargetObjectId = '5004J00000DeWAH'
+
+You can also use this tool to visualise the json, for example this one:
+{"glossary": {"title": "example glossary","GlossDiv": {"title": "S","GlossList": {"GlossEntry": {"ID": "SGML","SortAs": "SGML","GlossTerm": "Standard Generalized Markup Language","Acronym": "SGML","Abbrev": "ISO 8879:1986","GlossDef": {"para": "A meta-markup language, used to create markup languages such as DocBook.","GlossSeeAlso": ["GML", "XML"]},"GlossSee": "markup"}}}}}
+</textarea>
+<br></br>
+
+<div id="wrapper" class="slds-m-top_xx-small" >
+
+        <button class="slds-button slds-button_brand" onclick="javascript:downloadMySOQL('SOQLExp','nodownload');">Run</button>
+        <button class="slds-button slds-button_neutral" onclick="javascript:generateURL('SOQLExp');">Create Report URL</button>
+        &nbsp;
+        <input type="text" id="objectName" value="Account"/>
+        <select id="select" onchange="executeSelect()">
+         <option value="--select action--">--select action--</option>
+         <option value="Describe Object">Describe Object</option>
+         <option value="Object Fields">Object Fields</option>
+         <option value="Object Child Relations">Object Child Relations</option>    
+         <option value="Show SOQL">Show SOQL</option>    
+         <option value="Show SOQL(creatable only)">Show SOQL(creatable only)</option>    
+         <option value="Show SOQL(custom fields only)">Show SOQL(custom fields only)</option>    
+         <option value="Record types">Record Types</option>    
+        </select>
+        &nbsp;
+        &nbsp;
+        &nbsp;
+        <select id="otherActions" onchange="otherActions()">
+         <option value="--other actions--">--other actions--</option>
+         <option value="Download (csv)">Download (csv)</option>    
+         <option value="Download (excel)">Download (excel)</option>    
+         <option value="Download (json)">Download (json)</option>    
+         <option value="----">----</option>
+         <option value="Show all objects">Show all objects</option>
+         <option value="Show Ajax console">Show Ajax console</option>    
+         <option value="Show User Info">Show User Info</option>    
+        </select>
+		<input type="checkbox" id="flatView" name="vehicle1" value="Yes" onclick="javascript:downloadMySOQL('SOQLExp','nodownload');" checked="true"/>
+		<label for="flatView">Flat view</label>
+</div>
+</div> <!-- scope -->
+
+<div id="divDescribeGlobal" style="margin: 5px;"></div>
+
+<script>
+    var url_string = window.location.href;
+    var url = new URL(url_string);
+	var flatView = url.searchParams.get("flatView");
+    var q = url.searchParams.get("q");
+    var header = url.searchParams.get("header");
+    if (flatView != null) {
+        document.getElementById('flatView').checked = (flatView=='true');
+    } 
+    if (q != null) {
+        document.getElementById('SOQLExp').value = q;
+        downloadMySOQL('SOQLExp','nodownload');
+    } 
+    if (header != null) {
+        document.getElementById('SOQLExp').style.display="none";
+        document.getElementById('wrapper').style.display="none";
+        document.getElementById('header').innerHTML =header;
+    } 
+</script>
+
+
+</body>
+
+</apex:page>

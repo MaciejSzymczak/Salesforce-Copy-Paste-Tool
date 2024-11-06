@@ -1,0 +1,263 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
+    <actionOverrides>
+        <actionName>Accept</actionName>
+        <type>Default</type>
+    </actionOverrides>
+    <actionOverrides>
+        <actionName>CancelEdit</actionName>
+        <type>Default</type>
+    </actionOverrides>
+    <actionOverrides>
+        <actionName>Clone</actionName>
+        <type>Default</type>
+    </actionOverrides>
+    <actionOverrides>
+        <actionName>Delete</actionName>
+        <type>Default</type>
+    </actionOverrides>
+    <actionOverrides>
+        <actionName>Edit</actionName>
+        <type>Default</type>
+    </actionOverrides>
+    <actionOverrides>
+        <actionName>List</actionName>
+        <type>Default</type>
+    </actionOverrides>
+    <actionOverrides>
+        <actionName>New</actionName>
+        <type>Default</type>
+    </actionOverrides>
+    <actionOverrides>
+        <actionName>SaveEdit</actionName>
+        <type>Default</type>
+    </actionOverrides>
+    <actionOverrides>
+        <actionName>Tab</actionName>
+        <type>Default</type>
+    </actionOverrides>
+    <actionOverrides>
+        <actionName>View</actionName>
+        <type>Default</type>
+    </actionOverrides>
+    <allowInChatterGroups>false</allowInChatterGroups>
+    <compactLayoutAssignment>SYSTEM</compactLayoutAssignment>
+    <deploymentStatus>Deployed</deploymentStatus>
+    <enableActivities>false</enableActivities>
+    <enableBulkApi>true</enableBulkApi>
+    <enableChangeDataCapture>false</enableChangeDataCapture>
+    <enableFeeds>false</enableFeeds>
+    <enableHistory>true</enableHistory>
+    <enableReports>true</enableReports>
+    <enableSearch>true</enableSearch>
+    <enableSharing>true</enableSharing>
+    <enableStreamingApi>true</enableStreamingApi>
+    <externalSharingModel>Private</externalSharingModel>
+    <fields>
+        <fullName>ButtonOnErrorAction__c</fullName>
+        <externalId>false</externalId>
+        <label>Action (error)</label>
+        <required>false</required>
+        <trackHistory>false</trackHistory>
+        <trackTrending>false</trackTrending>
+        <type>TextArea</type>
+    </fields>
+    <fields>
+        <fullName>ButtonOnErrorLabel__c</fullName>
+        <externalId>false</externalId>
+        <label>Label (error)</label>
+        <length>255</length>
+        <required>false</required>
+        <trackHistory>false</trackHistory>
+        <trackTrending>false</trackTrending>
+        <type>Text</type>
+        <unique>false</unique>
+    </fields>
+    <fields>
+        <fullName>ButtonOnErrorRedirect__c</fullName>
+        <defaultValue>false</defaultValue>
+        <externalId>false</externalId>
+        <label>Immediate Redirect (error)</label>
+        <trackHistory>false</trackHistory>
+        <trackTrending>false</trackTrending>
+        <type>Checkbox</type>
+    </fields>
+    <fields>
+        <fullName>ButtonOnSuccessAction__c</fullName>
+        <defaultValue>&quot;window.open(&apos;/apex/SOQLExplorer&apos;) /*window.open(&apos;/apex/SOQLExplorer&apos;)=open in new tab. window.location.href = &apos;/apex/SOQLExplorer&apos; = open in the same tab*/&quot;</defaultValue>
+        <externalId>false</externalId>
+        <inlineHelpText>window.open(&apos;/apex/SOQLExplorer&apos;)
+Do not use &quot;.</inlineHelpText>
+        <label>Action</label>
+        <required>false</required>
+        <trackHistory>false</trackHistory>
+        <trackTrending>false</trackTrending>
+        <type>TextArea</type>
+    </fields>
+    <fields>
+        <fullName>ButtonOnSuccessLabel__c</fullName>
+        <externalId>false</externalId>
+        <label>Label</label>
+        <length>255</length>
+        <required>false</required>
+        <trackHistory>false</trackHistory>
+        <trackTrending>false</trackTrending>
+        <type>Text</type>
+        <unique>false</unique>
+    </fields>
+    <fields>
+        <fullName>ButtonOnSuccessRedirect__c</fullName>
+        <defaultValue>false</defaultValue>
+        <externalId>false</externalId>
+        <label>Immediate Redirect</label>
+        <trackHistory>false</trackHistory>
+        <trackTrending>false</trackTrending>
+        <type>Checkbox</type>
+    </fields>
+    <fields>
+        <fullName>DML_Operation__c</fullName>
+        <externalId>false</externalId>
+        <label>DML_Operation</label>
+        <required>false</required>
+        <trackHistory>false</trackHistory>
+        <trackTrending>false</trackTrending>
+        <type>Picklist</type>
+        <valueSet>
+            <valueSetDefinition>
+                <sorted>false</sorted>
+                <value>
+                    <fullName>Upsert</fullName>
+                    <default>false</default>
+                    <label>Upsert</label>
+                </value>
+                <value>
+                    <fullName>Update</fullName>
+                    <default>false</default>
+                    <label>Update</label>
+                </value>
+                <value>
+                    <fullName>Delete</fullName>
+                    <default>false</default>
+                    <label>Delete</label>
+                </value>
+                <value>
+                    <fullName>Insert</fullName>
+                    <default>false</default>
+                    <label>Insert</label>
+                </value>
+            </valueSetDefinition>
+        </valueSet>
+    </fields>
+    <fields>
+        <fullName>Data_Header__c</fullName>
+        <caseSensitive>false</caseSensitive>
+        <externalId>true</externalId>
+        <inlineHelpText>Just copy header columns from your excel here
+Example: &quot;Sap Account Number	Call Frequency&quot;</inlineHelpText>
+        <label>Data Header</label>
+        <length>255</length>
+        <required>true</required>
+        <trackHistory>false</trackHistory>
+        <trackTrending>false</trackTrending>
+        <type>Text</type>
+        <unique>true</unique>
+    </fields>
+    <fields>
+        <fullName>Insert_Null_Values__c</fullName>
+        <defaultValue>true</defaultValue>
+        <externalId>false</externalId>
+        <inlineHelpText>Not checked means that blank values from Excel will not be updated in Salesforce
+Checked value means blank values will be updated in Salesforce</inlineHelpText>
+        <label>Insert Null Values</label>
+        <trackHistory>false</trackHistory>
+        <trackTrending>false</trackTrending>
+        <type>Checkbox</type>
+    </fields>
+    <fields>
+        <fullName>List_Of_Fields__c</fullName>
+        <externalId>false</externalId>
+        <inlineHelpText>Comma separated list of Salesforce fields. Use API names.
+Use the character - to exclude fields from updating (formulas, read-only fields).
+
+Example value: Id,Name-,Call_Frequency__c</inlineHelpText>
+        <label>List Of Fields</label>
+        <length>4000</length>
+        <trackHistory>false</trackHistory>
+        <trackTrending>false</trackTrending>
+        <type>LongTextArea</type>
+        <visibleLines>2</visibleLines>
+    </fields>
+    <fields>
+        <fullName>Max_Records__c</fullName>
+        <defaultValue>100000</defaultValue>
+        <externalId>false</externalId>
+        <inlineHelpText>The limit of records to be processed</inlineHelpText>
+        <label>Max Records</label>
+        <precision>18</precision>
+        <required>false</required>
+        <scale>0</scale>
+        <trackHistory>false</trackHistory>
+        <trackTrending>false</trackTrending>
+        <type>Number</type>
+        <unique>false</unique>
+    </fields>
+    <fields>
+        <fullName>Sync_Field__c</fullName>
+        <externalId>false</externalId>
+        <inlineHelpText>API field name for upsert. Field must be External unique id. For updates paste Id. 
+Example: Id</inlineHelpText>
+        <label>Sync Field</label>
+        <length>100</length>
+        <required>true</required>
+        <trackHistory>false</trackHistory>
+        <trackTrending>false</trackTrending>
+        <type>Text</type>
+        <unique>false</unique>
+    </fields>
+    <fields>
+        <fullName>Where_Clause__c</fullName>
+        <externalId>false</externalId>
+        <inlineHelpText>Optional. 
+Example value: RecordType.Name=&apos;Account Type IT&apos;
+Important while copying data to Excel.
+Ignored while uploading data to Salesforce.</inlineHelpText>
+        <label>Where Clause</label>
+        <length>255</length>
+        <required>false</required>
+        <trackHistory>false</trackHistory>
+        <trackTrending>false</trackTrending>
+        <type>Text</type>
+        <unique>false</unique>
+    </fields>
+    <fields>
+        <fullName>sObjectName__c</fullName>
+        <externalId>false</externalId>
+        <inlineHelpText>API object name. Example: Account</inlineHelpText>
+        <label>sObjectName</label>
+        <length>255</length>
+        <required>true</required>
+        <trackHistory>false</trackHistory>
+        <trackTrending>false</trackTrending>
+        <type>Text</type>
+        <unique>false</unique>
+    </fields>
+    <label>Copy Paste Tool</label>
+    <nameField>
+        <label>Name</label>
+        <trackHistory>false</trackHistory>
+        <type>Text</type>
+    </nameField>
+    <pluralLabel>Copy Paste Tools</pluralLabel>
+    <searchLayouts/>
+    <sharingModel>Private</sharingModel>
+    <validationRules>
+        <fullName>Update</fullName>
+        <active>true</active>
+        <errorConditionFormula>TEXT(DML_Operation__c)=&quot;Update&quot;
+&amp;&amp;
+Sync_Field__c&lt;&gt;&quot;Id&quot;</errorConditionFormula>
+        <errorDisplayField>Sync_Field__c</errorDisplayField>
+        <errorMessage>Only Id is acceptable for updates</errorMessage>
+    </validationRules>
+    <visibility>Public</visibility>
+</CustomObject>
