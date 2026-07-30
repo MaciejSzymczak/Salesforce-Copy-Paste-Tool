@@ -407,6 +407,21 @@
             document.getElementById('runSpinner').style.display = 'none';
         }
 
+        //the recordset from the last SOQL query, kept so Flat view/Transpose result can re-render it without re-running the query
+        var lastRecordset = null;
+
+        function refreshResultView() {
+            if (!lastRecordset) return;
+            var flatView = document.getElementById('flatView').checked;
+            var transposeView = document.getElementById('transposeView').checked;
+            var dataForTable = flatView ? flattenJSON(lastRecordset) : lastRecordset;
+            if (transposeView) {
+                dataForTable = transposeRecordset(dataForTable);
+            }
+            var data = ConvertJsonToTable(dataForTable);
+            document.getElementById('divDescribeGlobal').innerHTML = data + '<br/>Count:' + lastRecordset.length;
+        }
+
         function downloadMySOQL(textareaId, pfieldSeparator) {
             showSpinner();
             setTimeout(function() {
@@ -457,6 +472,7 @@
                 }
                 
                 recordset = JSON.parse(myJsonString);
+                lastRecordset = recordset;
                 //print (recordset);
                 fieldSeparator = pfieldSeparator;
                 data = ConvertJsonToTable (recordset,'','','',true);
@@ -493,8 +509,33 @@
         }
 
         function userInfo() {
-            var dg = sforce.connection.getUserInfo();    
+            var dg = sforce.connection.getUserInfo();
             document.getElementById('divDescribeGlobal').innerHTML = '<div class="datagrid">'+ConvertJsonToTable(dg)+'</div>';
+        }
+
+        function showOrgLimits() {
+            showSpinner();
+            fetch('/services/data/v60.0/limits', { headers: { 'Authorization': 'Bearer ' + sforce.connection.sessionId } })
+                .then(function(response) { return response.json(); })
+                .then(function(limits) {
+                    var rows = [];
+                    for (var key in limits) {
+                        if (limits.hasOwnProperty(key)) {
+                            rows.push({ Limit: key, Max: limits[key].Max, Remaining: limits[key].Remaining });
+                        }
+                    }
+                    document.getElementById('divDescribeGlobal').innerHTML = '<div class="datagrid">'+ConvertJsonToTable(rows)+'</div>';
+                })
+                .catch(function(err) {
+                    document.getElementById('divDescribeGlobal').innerHTML = err;
+                })
+                .finally(function() {
+                    hideSpinner();
+                });
+        }
+
+        function clearResults() {
+            document.getElementById('divDescribeGlobal').innerHTML = '';
         }
 
         function describeGlobal () {
@@ -562,6 +603,8 @@ function otherActions() {
            case 2: describeGlobal(); break;
            case 3: openInNewTab('/soap/ajax/60.0/debugshell.html'); break;
            case 4: userInfo (); break;
+           case 5: showOrgLimits(); break;
+           case 7: clearResults(); break;
 
            //default:
            //    alert('Default case'); break;
@@ -640,41 +683,54 @@ You can also use this tool to visualise the json, for example this one:
 
 <div id="wrapper" class="slds-m-top_xx-small" >
 
-        <button class="slds-button slds-button_brand" onclick="javascript:downloadMySOQL('SOQLExp','nodownload');">Run</button>
-        <select id="moreActions" onchange="moreActions()">
-         <option value="--more--">More</option>
-         <option value="Download (csv)">Download (csv)</option>
-         <option value="Download (excel)">Download (excel)</option>
-         <option value="Download (json)">Download (json)</option>
-         <option value="Create Report URL">Create Report URL</option>
-        </select>
+        <fieldset style="display:inline-block; vertical-align:top; border:1px solid #d8dde6; margin:0; padding:2px 8px;">
+            <legend style="padding:0 4px; font-size:0.75rem;">Execute SOQL</legend>
+            <button class="slds-button slds-button_brand" onclick="javascript:downloadMySOQL('SOQLExp','nodownload');">Run</button>
+            <select id="moreActions" onchange="moreActions()">
+             <option value="--more--">More</option>
+             <option value="Download (csv)">Download (csv)</option>
+             <option value="Download (excel)">Download (excel)</option>
+             <option value="Download (json)">Download (json)</option>
+             <option value="Create Report URL">Create Report URL</option>
+            </select>
+            &nbsp;
+            <span style="display:inline-block; vertical-align:top;">
+                <span style="display:block;">
+                    <input type="checkbox" id="flatView" name="flatView" value="Yes" onclick="javascript:refreshResultView();" checked="true"/>
+                    <label for="flatView">Flat view</label>
+                </span>
+                <span style="display:block;">
+                    <input type="checkbox" id="transposeView" name="transposeView" value="Yes" onclick="javascript:refreshResultView();"/>
+                    <label for="transposeView">Transpose result</label>
+                </span>
+            </span>
+        </fieldset>
         &nbsp;
-        <input type="text" id="objectName" value="Account"/>
-        <select id="select" onchange="executeSelect()">
-         <option value="--select action--">--select action--</option>
-         <option value="Describe Object">Describe Object</option>
-         <option value="Object Fields">Object Fields</option>
-         <option value="Object Child Relations">Object Child Relations</option>    
-         <option value="Show SOQL">Show SOQL</option>    
-         <option value="Show SOQL(creatable only)">Show SOQL(creatable only)</option>    
-         <option value="Show SOQL(custom fields only)">Show SOQL(custom fields only)</option>    
-         <option value="Record types">Record Types</option>    
-        </select>
-        &nbsp;
-        &nbsp;
+        <fieldset style="display:inline-block; vertical-align:top; border:1px solid #d8dde6; margin:0; padding:2px 8px;">
+            <legend style="padding:0 4px; font-size:0.75rem;">Explore object</legend>
+            <input type="text" id="objectName" value="Account"/>
+            <select id="select" onchange="executeSelect()">
+             <option value="--select action--">--select action--</option>
+             <option value="Describe Object">Describe Object</option>
+             <option value="Object Fields">Object Fields</option>
+             <option value="Object Child Relations">Object Child Relations</option>
+             <option value="Show SOQL">Show SOQL</option>
+             <option value="Show SOQL(creatable only)">Show SOQL(creatable only)</option>
+             <option value="Show SOQL(custom fields only)">Show SOQL(custom fields only)</option>
+             <option value="Record types">Record Types</option>
+            </select>
+        </fieldset>
         &nbsp;
         <select id="otherActions" onchange="otherActions()">
          <option value="--other actions--">--other actions--</option>
          <option value="----">----</option>
          <option value="Show all objects">Show all objects</option>
-         <option value="Show Ajax console">Show Ajax console</option>    
-         <option value="Show User Info">Show User Info</option>    
+         <option value="Show Ajax console">Show Ajax console</option>
+         <option value="Show User Info">Show User Info</option>
+         <option value="Show Org Limits">Show Org Limits</option>
+         <option value="----">----</option>
+         <option value="Clear results">Clear results</option>
         </select>
-		<input type="checkbox" id="flatView" name="vehicle1" value="Yes" onclick="javascript:downloadMySOQL('SOQLExp','nodownload');" checked="true"/>
-		<label for="flatView">Flat view</label>
-		&nbsp;
-		<input type="checkbox" id="transposeView" name="vehicle2" value="Yes" onclick="javascript:downloadMySOQL('SOQLExp','nodownload');"/>
-		<label for="transposeView">Transpose result</label>
 </div>
 </div> <!-- scope -->
 
