@@ -79,8 +79,24 @@
 					}
 				}
 			}
-		}				
-		
+		}
+
+		//swap rows and columns: one row per field, one column per record
+		function transposeRecordset(records) {
+			if (!records || records.length == 0) return records;
+			var headers = array_keys(records[0]);
+			var transposed = [];
+			for (var h = 0; h < headers.length; h++) {
+				var row = {};
+				row['Field'] = headers[h];
+				for (var i = 0; i < records.length; i++) {
+					row['Record ' + (i+1)] = records[i][headers[h]];
+				}
+				transposed.push(row);
+			}
+			return transposed;
+		}
+
 		/**
 		 * @author Maciej Szymczak, based on Json-to-HTML-Table-master by Afshin Mehrabani
 		 */
@@ -352,6 +368,20 @@
         }
         }
         
+        function isSalesforceId(value) {
+            return /^[a-zA-Z0-9]{15}$|^[a-zA-Z0-9]{18}$/.test(value);
+        }
+
+        function getObjectNameFromKeyPrefix(prefix) {
+            var dg = sforce.connection.describeGlobal();
+            for (var i = 0; i < dg.sobjects.length; i++) {
+                if (dg.sobjects[i].keyPrefix == prefix) {
+                    return dg.sobjects[i].name;
+                }
+            }
+            return null;
+        }
+
         function getCommaSeparatedFields (objectName, creatableOnly, customFieldsOnly) {
             commaSeparatedFields = '';
             descObject=sforce.connection.describeSObjects([objectName]);
@@ -369,10 +399,30 @@
                 window.open(URL);
         }
 
+        function showSpinner() {
+            document.getElementById('runSpinner').style.display = 'block';
+        }
+
+        function hideSpinner() {
+            document.getElementById('runSpinner').style.display = 'none';
+        }
+
         function downloadMySOQL(textareaId, pfieldSeparator) {
+            showSpinner();
+            setTimeout(function() {
             try {
                 var mySOQL = GetSelection(textareaId);
-                
+
+                //if the user typed/selected a bare Salesforce ID, turn it into 'select * from <Object> where id = ...'
+                var trimmedSOQL = mySOQL.trim();
+                if (isSalesforceId(trimmedSOQL)) {
+                    var objectName = getObjectNameFromKeyPrefix(trimmedSOQL.substring(0,3));
+                    if (objectName) {
+                        mySOQL = "select * from " + objectName + " where id = '" + trimmedSOQL + "'";
+                        ModifySelection(textareaId, mySOQL);
+                    }
+                }
+
                 //replace 'select * from contact' with 'select <column names> from contact'
                 if (mySOQL.toLowerCase().startsWith('select * from')) {
                     var fromStr = mySOQL.substring(14,65000)+' ';
@@ -418,24 +468,30 @@
 				}
 				if (pfieldSeparator=='nodownload') {
 					var flatView = document.getElementById('flatView').checked;
-					if (flatView) {
-						data = ConvertJsonToTable ( flattenJSON(recordset));						
-					} else {
-					  data = ConvertJsonToTable ( recordset );
+					var transposeView = document.getElementById('transposeView').checked;
+					var dataForTable = flatView ? flattenJSON(recordset) : recordset;
+					if (transposeView) {
+						dataForTable = transposeRecordset(dataForTable);
 					}
+					data = ConvertJsonToTable ( dataForTable );
 				}
-				
+
                 if (pfieldSeparator!='nodownload') {
                   download(data, filename, type);
                 }
-                document.getElementById('divDescribeGlobal').innerHTML = data + '<br/>Count:'+rowCount;
+                document.getElementById('divDescribeGlobal').innerHTML = data + '<br/>Count:'+recordset.length;
                 }
             catch(err)
             {
                 document.getElementById('divDescribeGlobal').innerHTML = err;
             }
-        } 
-            
+            finally
+            {
+                hideSpinner();
+            }
+            }, 10);
+        }
+
         function userInfo() {
             var dg = sforce.connection.getUserInfo();    
             document.getElementById('divDescribeGlobal').innerHTML = '<div class="datagrid">'+ConvertJsonToTable(dg)+'</div>';
@@ -503,17 +559,25 @@ function executeSelect() {
 function otherActions() {
     switch (document.getElementById('otherActions').selectedIndex)
         {
-           case 1: downloadMySOQL('SOQLExp',','); break;
-           case 2: downloadMySOQL('SOQLExp',String.fromCharCode(9)); break;
-           case 3: downloadMySOQL('SOQLExp','JSON'); break;
-           case 5: describeGlobal(); break;
-           case 6: openInNewTab('/soap/ajax/60.0/debugshell.html'); break;
-           case 7: userInfo (); break;
+           case 2: describeGlobal(); break;
+           case 3: openInNewTab('/soap/ajax/60.0/debugshell.html'); break;
+           case 4: userInfo (); break;
 
-           //default: 
+           //default:
            //    alert('Default case'); break;
         }
         document.getElementById('otherActions').selectedIndex = 0;
+}
+
+function moreActions() {
+    switch (document.getElementById('moreActions').selectedIndex)
+        {
+           case 1: downloadMySOQL('SOQLExp',','); break;
+           case 2: downloadMySOQL('SOQLExp',String.fromCharCode(9)); break;
+           case 3: downloadMySOQL('SOQLExp','JSON'); break;
+           case 4: generateURL('SOQLExp'); break;
+        }
+        document.getElementById('moreActions').selectedIndex = 0;
 }
 
 
@@ -523,7 +587,7 @@ function otherActions() {
 <body>
 <div class="slds-scope">
     <div id="header" class="slds-notify slds-notify_alert slds-theme_alert-texture slds-theme_info" role="alert">
-      <h2>SOQL Explorer - unleash the power of SOQL. &nbsp;&nbsp;&nbsp; Build 2024.07&nbsp;&nbsp;&nbsp;</h2>
+      <h2>SOQL Explorer - unleash the power of SOQL. &nbsp;&nbsp;&nbsp; Build 2026.07&nbsp;&nbsp;&nbsp;</h2>
       <h3>@author &nbsp;<a href="https://www.linkedin.com/in/maciej-szymczak-a818a011/">Maciej Szymczak</a></h3>
     </div>
     
@@ -577,7 +641,13 @@ You can also use this tool to visualise the json, for example this one:
 <div id="wrapper" class="slds-m-top_xx-small" >
 
         <button class="slds-button slds-button_brand" onclick="javascript:downloadMySOQL('SOQLExp','nodownload');">Run</button>
-        <button class="slds-button slds-button_neutral" onclick="javascript:generateURL('SOQLExp');">Create Report URL</button>
+        <select id="moreActions" onchange="moreActions()">
+         <option value="--more--">More</option>
+         <option value="Download (csv)">Download (csv)</option>
+         <option value="Download (excel)">Download (excel)</option>
+         <option value="Download (json)">Download (json)</option>
+         <option value="Create Report URL">Create Report URL</option>
+        </select>
         &nbsp;
         <input type="text" id="objectName" value="Account"/>
         <select id="select" onchange="executeSelect()">
@@ -595,9 +665,6 @@ You can also use this tool to visualise the json, for example this one:
         &nbsp;
         <select id="otherActions" onchange="otherActions()">
          <option value="--other actions--">--other actions--</option>
-         <option value="Download (csv)">Download (csv)</option>    
-         <option value="Download (excel)">Download (excel)</option>    
-         <option value="Download (json)">Download (json)</option>    
          <option value="----">----</option>
          <option value="Show all objects">Show all objects</option>
          <option value="Show Ajax console">Show Ajax console</option>    
@@ -605,8 +672,19 @@ You can also use this tool to visualise the json, for example this one:
         </select>
 		<input type="checkbox" id="flatView" name="vehicle1" value="Yes" onclick="javascript:downloadMySOQL('SOQLExp','nodownload');" checked="true"/>
 		<label for="flatView">Flat view</label>
+		&nbsp;
+		<input type="checkbox" id="transposeView" name="vehicle2" value="Yes" onclick="javascript:downloadMySOQL('SOQLExp','nodownload');"/>
+		<label for="transposeView">Transpose result</label>
 </div>
 </div> <!-- scope -->
+
+<div id="runSpinner" class="slds-spinner_container" style="display:none; position:relative; height:2.5rem;">
+    <div class="slds-spinner slds-spinner_medium slds-spinner_brand" role="status">
+        <span class="slds-assistive-text">Loading</span>
+        <div class="slds-spinner__dot-a"></div>
+        <div class="slds-spinner__dot-b"></div>
+    </div>
+</div>
 
 <div id="divDescribeGlobal" style="margin: 5px;"></div>
 
