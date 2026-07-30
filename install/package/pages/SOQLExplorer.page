@@ -439,6 +439,8 @@
 
         //the recordset from the last SOQL query, kept so Flat view/Transpose result can re-render it without re-running the query
         var lastRecordset = null;
+        //Tooling API records aren't SOAP sObjects, so the inline-edit/save path (which relies on sforce.connection.update()) is disabled for them
+        var lastQueryWasTooling = false;
 
         function refreshResultView() {
             if (!lastRecordset) return;
@@ -449,9 +451,32 @@
             if (transposeView) {
                 dataForTable = transposeRecordset(dataForTable);
             }
-            var editable = !flatView && !transposeView;
+            var editable = !flatView && !transposeView && !lastQueryWasTooling;
             var data = ConvertJsonToTable(dataForTable, '', '', '', false, false, editable);
             document.getElementById('divDescribeGlobal').innerHTML = data + '<br/>Count:' + lastRecordset.length;
+        }
+
+        //queries the Tooling API (for objects like ApexClass/ApexTrigger/... that aren't queryable via the normal SOAP API)
+        async function queryToolingApi(soql) {
+            var records = [];
+            var url = '/services/data/v60.0/tooling/query?q=' + encodeURIComponent(soql);
+            while (url) {
+                var response = await fetch(url, { headers: { 'Authorization': 'Bearer ' + sforce.connection.sessionId } });
+                var body = await response.json();
+                if (Array.isArray(body) && body.length && body[0].errorCode) {
+                    throw new Error(body[0].message || 'Tooling API query failed');
+                }
+                records = records.concat(body.records || []);
+                url = body.nextRecordsUrl || null;
+            }
+            //normalize the REST shape (attributes.type) to the flat .type property the grid/itemsToHide logic expects
+            for (var i = 0; i < records.length; i++) {
+                if (records[i].attributes && records[i].attributes.type) {
+                    records[i].type = records[i].attributes.type;
+                }
+                delete records[i].attributes;
+            }
+            return records;
         }
 
         //--- inline grid editing (plain SOQL result grid only - not flat view/transpose, not other views) ---
@@ -566,7 +591,7 @@
 
         function downloadMySOQL(textareaId, pfieldSeparator) {
             showSpinner();
-            setTimeout(function() {
+            setTimeout(async function() {
             try {
                 var mySOQL = GetSelection(textareaId);
 
@@ -593,10 +618,14 @@
                     //ModifySelection(textareaId, mySOQL);
                 }
                 
+                var toolingApi = document.getElementById('toolingApi').checked;
+
                 myJsonString = '';
                 //check if the string is either SOQL or JSON
                 if (mySOQL[0] == "[" || mySOQL[0] == "{" ) {
                   myJsonString = mySOQL;
+                } else if (toolingApi) {
+                  myJsonString = JSON.stringify(await queryToolingApi(mySOQL));
                 } else {
                   var records=[];
                   var result = sforce.connection.query(mySOQL);
@@ -612,9 +641,10 @@
                   }
                   myJsonString = JSON.stringify(records);
                 }
-                
+
                 recordset = JSON.parse(myJsonString);
                 lastRecordset = recordset;
+                lastQueryWasTooling = toolingApi;
                 //print (recordset);
                 fieldSeparator = pfieldSeparator;
                 data = ConvertJsonToTable (recordset,'','','',true);
@@ -632,7 +662,7 @@
 					if (transposeView) {
 						dataForTable = transposeRecordset(dataForTable);
 					}
-					var editableGrid = !flatView && !transposeView;
+					var editableGrid = !flatView && !transposeView && !toolingApi;
 					data = ConvertJsonToTable ( dataForTable, '', '', '', false, false, editableGrid );
 				}
 
@@ -867,6 +897,10 @@ You can also use this tool to visualise the json, for example this one:
                 <span style="display:block;">
                     <input type="checkbox" id="transposeView" name="transposeView" value="Yes" onclick="javascript:refreshResultView();"/>
                     <label for="transposeView">Transpose result</label>
+                </span>
+                <span style="display:block;">
+                    <input type="checkbox" id="toolingApi" name="toolingApi" value="Yes"/>
+                    <label for="toolingApi" title="Query via the Tooling API (e.g. ApexClass, ApexTrigger) instead of the standard API">Tooling API</label>
                 </span>
             </span>
         </fieldset>
