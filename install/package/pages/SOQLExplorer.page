@@ -712,6 +712,14 @@
             document.getElementById('divDescribeGlobal').innerHTML = '';
         }
 
+        function showAboutDialog() {
+            document.getElementById('aboutModal').style.display = 'block';
+        }
+
+        function hideAboutDialog() {
+            document.getElementById('aboutModal').style.display = 'none';
+        }
+
         function showAllObjectsPicklist(button) {
             var input = document.getElementById('objectName');
             var dg = sforce.connection.describeGlobal();
@@ -825,8 +833,7 @@ function moreActions() {
 <body>
 <div class="slds-scope">
     <div id="header" class="slds-notify slds-notify_alert slds-theme_alert-texture slds-theme_info" role="alert">
-      <h2>SOQL Explorer - unleash the power of SOQL. &nbsp;&nbsp;&nbsp; Build 2026.07&nbsp;&nbsp;&nbsp;</h2>
-      <h3>@author &nbsp;<a href="https://www.linkedin.com/in/maciej-szymczak-a818a011/">Maciej Szymczak</a></h3>
+      <h2>SOQL Explorer</h2>
     </div>
     
 <textarea class="slds-textarea" Id="SOQLExp" rows="10" cols="80" style="width:100%; font-family:'Courier New'">
@@ -921,15 +928,29 @@ You can also use this tool to visualise the json, for example this one:
             </select>
         </fieldset>
         &nbsp;
-        <select id="otherActions" onchange="otherActions()">
-         <option value="--other actions--">--other actions--</option>
-         <option value="Show Ajax console">Show Ajax console</option>
-         <option value="Show User Info">Show User Info</option>
-         <option value="Show Org Limits">Show Org Limits</option>
-         <option value="Clear results">Clear results</option>
-        </select>
+        <fieldset style="display:inline-block; vertical-align:top; border:1px solid #d8dde6; margin:0; padding:2px 8px;">
+            <select id="otherActions" onchange="otherActions()">
+             <option value="--other actions--">--other actions--</option>
+             <option value="Show Ajax console">Show Ajax console</option>
+             <option value="Show User Info">Show User Info</option>
+             <option value="Show Org Limits">Show Org Limits</option>
+             <option value="Clear results">Clear results</option>
+            </select>
+            &nbsp;
+            <button class="slds-button slds-button_neutral" onclick="javascript:showAboutDialog();">About</button>
+        </fieldset>
 </div>
 </div> <!-- scope -->
+
+<div id="aboutModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:9000;" onclick="javascript:hideAboutDialog();">
+    <div style="background:#fff; color:#000; max-width:360px; margin:10% auto; padding:24px; border-radius:8px; text-align:center; box-shadow:0 4px 20px rgba(0,0,0,0.3);" onclick="event.stopPropagation();">
+        <h2 style="margin:0 0 8px;">SOQL Explorer</h2>
+        <p style="margin:0 0 16px;">Powerful SOQL query editor and explorer</p>
+        <p style="margin:0;">Version 2026.07</p>
+        <p style="margin:0 0 16px;">&copy; 2026 Maciej Szymczak</p>
+        <button class="slds-button slds-button_brand" onclick="javascript:hideAboutDialog();">Close</button>
+    </div>
+</div>
 
 <div id="runSpinner" class="slds-spinner_container" style="display:none; position:relative; height:2.5rem;">
     <div class="slds-spinner slds-spinner_medium slds-spinner_brand" role="status">
