@@ -53,6 +53,38 @@
 .cellError {
     background-color: #ffd6d6 !important;
 }
+
+.qgList {
+    list-style: none;
+    margin: 0 0 20px;
+    padding: 0;
+}
+.qgItem {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 9px 4px;
+    border-bottom: 1px solid #f0f2f5;
+    transition: background-color 0.15s ease;
+}
+.qgItem:last-child {
+    border-bottom: none;
+}
+.qgItem:hover {
+    background-color: #f7fafd;
+}
+.qgBullet {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #eaf4ff;
+    color: #1589ee;
+    font-size: 0.75rem;
+    line-height: 22px;
+    text-align: center;
+    font-weight: bold;
+}
 </style>
 
 
@@ -142,6 +174,8 @@
             var tdRow = '<td class="dataCell">{0}</td>';
             //editable cells: only used for the plain (non-flattened, non-transposed) SOQL result grid
             var tdRowEditable = '<td class="dataCell editableCell" contenteditable="true" data-id="{1}" data-object="{2}" data-field="{3}">{0}</td>';
+            //delete-row button: shown alongside editable cells, one per real sObject row
+            var tdRowDelete = '<td class="dataCell"><button class="slds-button slds-button_destructive slds-button_small" type="button" onclick="javascript:deleteRecord(\'{0}\',\'{1}\');">Delete</button></td>';
             var thCon = '';
             var tbCon = '';
             var trCon = '';
@@ -195,6 +229,9 @@
                            if (!fineLabel)
                                fineLabel = headers[i];
                            thCon += thRow.format(fineLabel);
+                        }
+                        if (editable) {
+                            thCon += thRow.format('');
                         }
                     }
                 }
@@ -261,6 +298,9 @@
                                 } catch(err) {
                                     //tbCon += tdRow.format("error:"+headers[j]+" "+parsedJson);
                                 }
+                            }
+                            if (editable) {
+                                tbCon += rowIsEditable ? tdRowDelete.format(rowRecord.Id, rowRecord.type) : tdRow.format('');
                             }
                             if (csvMode) tbCon = tbCon.substring(0, tbCon.length - 1); //truncate last comma
                             trCon += tr.format(tbCon)+(recurrence?'':'\r\n');
@@ -589,6 +629,28 @@
             }
         }
 
+        function deleteRecord(id, type) {
+            if (!confirm('Delete this ' + type + ' record (' + id + ')? This cannot be undone.')) return;
+            showSpinner();
+            try {
+                var results = sforce.connection.deleteIds([id]);
+                var result = results[0];
+                var success = result && (result.success === true || result.success === 'true');
+                if (success) {
+                    if (lastRecordset) {
+                        lastRecordset = lastRecordset.filter(function(r) { return r.Id !== id; });
+                    }
+                    refreshResultView();
+                } else {
+                    alert('Delete failed: ' + (result && result.errors ? JSON.stringify(result.errors) : 'Unknown error'));
+                }
+            } catch (err) {
+                alert('Delete failed: ' + err);
+            } finally {
+                hideSpinner();
+            }
+        }
+
         function downloadMySOQL(textareaId, pfieldSeparator) {
             showSpinner();
             setTimeout(async function() {
@@ -718,6 +780,14 @@
 
         function hideAboutDialog() {
             document.getElementById('aboutModal').style.display = 'none';
+        }
+
+        function showQuickGuideDialog() {
+            document.getElementById('quickGuideModal').style.display = 'block';
+        }
+
+        function hideQuickGuideDialog() {
+            document.getElementById('quickGuideModal').style.display = 'none';
         }
 
         function showAllObjectsPicklist(button) {
@@ -885,6 +955,7 @@ You can also use this tool to visualise the json, for example this one:
 
 <div id="wrapper" class="slds-m-top_xx-small" >
 
+        <div style="display:flex; align-items:stretch; flex-wrap:wrap; gap:8px;">
         <fieldset style="display:inline-block; vertical-align:top; border:1px solid #d8dde6; margin:0; padding:2px 8px;">
             <legend style="padding:0 4px; font-size:0.75rem;">Execute SOQL</legend>
             <button class="slds-button slds-button_brand" onclick="javascript:downloadMySOQL('SOQLExp','nodownload');">Run</button>
@@ -911,7 +982,6 @@ You can also use this tool to visualise the json, for example this one:
                 </span>
             </span>
         </fieldset>
-        &nbsp;
         <fieldset style="display:inline-block; vertical-align:top; border:1px solid #d8dde6; margin:0; padding:2px 8px;">
             <legend style="padding:0 4px; font-size:0.75rem;">Explore object</legend>
             <input type="text" id="objectName" value="Account"/>
@@ -927,7 +997,6 @@ You can also use this tool to visualise the json, for example this one:
              <option value="Record types">Record Types</option>
             </select>
         </fieldset>
-        &nbsp;
         <fieldset style="display:inline-block; vertical-align:top; border:1px solid #d8dde6; margin:0; padding:2px 8px;">
             <select id="otherActions" onchange="otherActions()">
              <option value="--other actions--">--other actions--</option>
@@ -938,7 +1007,10 @@ You can also use this tool to visualise the json, for example this one:
             </select>
             &nbsp;
             <button class="slds-button slds-button_neutral" onclick="javascript:showAboutDialog();">About</button>
+            <br/>
+            <button class="slds-button slds-button_neutral" onclick="javascript:showQuickGuideDialog();">Quick guide</button>
         </fieldset>
+        </div>
 </div>
 </div> <!-- scope -->
 
@@ -949,6 +1021,32 @@ You can also use this tool to visualise the json, for example this one:
         <p style="margin:0;">Version 2026.07</p>
         <p style="margin:0 0 16px;">&copy; 2026 Maciej Szymczak</p>
         <button class="slds-button slds-button_brand" onclick="javascript:hideAboutDialog();">Close</button>
+    </div>
+</div>
+
+<div id="quickGuideModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:9000; overflow-y:auto;" onclick="javascript:hideQuickGuideDialog();">
+    <div style="background:#fff; color:#1a1a1a; max-width:560px; margin:4% auto; padding:28px 32px; border-radius:12px; box-shadow:0 10px 40px rgba(0,0,0,0.35);" onclick="event.stopPropagation();">
+        <h2 style="margin:0 0 6px; font-size:1.4rem;">What SOQL Explorer offers</h2>
+        <div style="height:3px; width:48px; background:#1589ee; border-radius:2px; margin:8px 0 18px;"></div>
+        <ul class="qgList">
+            <li class="qgItem"><span class="qgBullet">&#10003;</span><span>Support for SELECT * FROM syntax</span></li>
+            <li class="qgItem"><span class="qgBullet">&#10003;</span><span>Run and manage multiple SOQL queries in a single window (select your query and click Run)</span></li>
+            <li class="qgItem"><span class="qgBullet">&#10003;</span><span>Simply enter a Record ID and SOQL Explorer will generate the query for you</span></li>
+            <li class="qgItem"><span class="qgBullet">&#10003;</span><span>Support for nested queries with both hierarchical and flat views</span></li>
+            <li class="qgItem"><span class="qgBullet">&#10003;</span><span>Library of ready-to-use SOQL examples</span></li>
+            <li class="qgItem"><span class="qgBullet">&#10003;</span><span>Tooling API</span></li>
+            <li class="qgItem"><span class="qgBullet">&#10003;</span><span>Rapid report creation for ad hoc business analysis</span></li>
+            <li class="qgItem"><span class="qgBullet">&#10003;</span><span>Edit and delete records. Permissions granted to user are respected</span></li>
+            <li class="qgItem"><span class="qgBullet">&#10003;</span><span>Transpose query results for an easy single-record view</span></li>
+            <li class="qgItem"><span class="qgBullet">&#10003;</span><span>View and export results as Table, Excel, CSV, or JSON</span></li>
+            <li class="qgItem"><span class="qgBullet">&#10003;</span><span>Object Explorer for browsing Salesforce metadata</span></li>
+            <li class="qgItem"><span class="qgBullet">&#10003;</span><span>JSON formatting and visualization</span></li>
+            <li class="qgItem"><span class="qgBullet">&#10003;</span><span>Light and safe &ndash; no third-party cloud services, just a single Visualforce page with no external libraries and WITHOUT apex controller</span></li>
+            <li class="qgItem"><span class="qgBullet">&#10003;</span><span>Completely free</span></li>
+        </ul>
+        <div style="text-align:right;">
+            <button class="slds-button slds-button_brand" onclick="javascript:hideQuickGuideDialog();">Close</button>
+        </div>
     </div>
 </div>
 
