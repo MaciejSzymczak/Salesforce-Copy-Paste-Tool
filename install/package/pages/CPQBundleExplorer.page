@@ -57,11 +57,13 @@
   }
   .controls {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
     margin-bottom: 16px;
   }
   .controls input {
     flex: 1;
+    min-width: 160px;
     padding: 8px 10px;
     border: 1px solid #c9cfd6;
     border-radius: 4px;
@@ -185,6 +187,26 @@
     font-weight: 600;
     color: #c00;
   }
+  .pricebook-section {
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid #e2e6eb;
+  }
+  .pricebook-section:first-child {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+  }
+  .pricebook-title {
+    margin: 0 0 8px 0;
+    font-size: 15px;
+    color: #16325c;
+  }
+  .section-empty {
+    font-size: 13px;
+    color: #888;
+    padding: 4px 6px;
+  }
 </style>
 </head>
 <body>
@@ -193,10 +215,14 @@
   <h2>CPQ Product Overview</h2>
 
   <div class="controls">
-    <input type="text" id="pricebookName" placeholder="Enter Pricebook name (e.g. Standard Price Book)"
-           value="C3-Gorkana CPQ Blended Pricebook"
+    <input type="text" id="pricebookName" placeholder="Pricebook name (LIKE, e.g. %CPQ%)"
+           value="%"
            onkeydown="if(event.key==='Enter'){loadPricebook();}"/>
-    <button onclick="loadPricebook()">Load</button>
+    <input type="text" id="productCodeFilter" placeholder="Product Code (LIKE, optional)"
+           onkeydown="if(event.key==='Enter'){loadPricebook();}"/>
+    <input type="text" id="productNameFilter" placeholder="Product Name (LIKE, optional)"
+           onkeydown="if(event.key==='Enter'){loadPricebook();}"/>
+    <button onclick="loadPricebook()">Search</button>
   </div>
 
   <div id="status"></div>
@@ -208,14 +234,25 @@
   sforce.connection.serverUrl  = '{!$Api.Partner_Server_URL_580}';
   sforce.connection.sessionId  = '{!$Api.Session_ID}';
 
-  // Set once the Pricebook is resolved; reused by every descendant
-  // level to look up PricebookEntry rows for option children.
-  var currentPricebookId = null;
   // Whether CurrencyIsoCode is a valid field in this org (multi-currency enabled).
   var isMultiCurrency = false;
 
   function escapeSoql(s) {
     return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  }
+
+  // Plain text is treated as a "contains" search; if the user already typed their own
+  // wildcard(s), their pattern is used verbatim instead (power-user escape hatch). The
+  // added '%'s are written back into the field itself so the user can see exactly what
+  // will be searched and trim one off (e.g. to make it a prefix-only or suffix-only match).
+  function normalizeLikeField(inputId) {
+    var el = document.getElementById(inputId);
+    var trimmed = el.value.trim();
+    if (trimmed && trimmed.indexOf('%') === -1) {
+      trimmed = '%' + trimmed + '%';
+    }
+    el.value = trimmed;
+    return trimmed;
   }
 
   function setStatus(msg, isError) {
@@ -240,27 +277,39 @@
   }
 
   function loadPricebook() {
-    var name = document.getElementById('pricebookName').value.trim();
-    if (!name) {
-      setStatus('Please enter a Pricebook name.', true);
-      return;
-    }
-    document.getElementById('treeRoot').innerHTML = '';
-    currentPricebookId = null;
-    isMultiCurrency = false;
-    setStatus('Loading pricebook...', false);
+    var rawName = normalizeLikeField('pricebookName');
+    var codeFilter = normalizeLikeField('productCodeFilter');
+    var nameFilter = normalizeLikeField('productNameFilter');
 
-    var q = "SELECT Id, Name FROM Pricebook2 WHERE Name = '" + escapeSoql(name) + "' LIMIT 1";
+    // Blank means "match every Pricebook" rather than blocking the search.
+    var name = rawName || '%';
+    var displayName = rawName || '(all)';
+
+    var treeRoot = document.getElementById('treeRoot');
+    treeRoot.innerHTML = '';
+    isMultiCurrency = false;
+    setStatus('Loading pricebooks...', false);
+
+    var q = "SELECT Id, Name FROM Pricebook2 WHERE Name LIKE '" + escapeSoql(name) + "' ORDER BY Name LIMIT 50";
 
     sforce.connection.query(q, {
       onSuccess: function (result) {
         var records = result.getArray('records');
         if (!records || records.length === 0) {
-          setStatus('No Pricebook found with name "' + name + '".', true);
+          setStatus('No Pricebook found matching "' + displayName + '".', true);
           return;
         }
-        currentPricebookId = records[0].Id;
-        loadRootProducts(currentPricebookId);
+
+        setStatus('Found ' + records.length + ' Pricebook' + (records.length === 1 ? '' : 's') +
+          ' matching "' + displayName + '". Click a row to expand its options.', false);
+
+        // Each match gets its own section, built up front (in match order) so results land
+        // in a stable order on screen regardless of which AJAX call happens to resolve first.
+        records.forEach(function (pb) {
+          var section = buildPricebookSection(pb.Name);
+          treeRoot.appendChild(section.el);
+          loadRootProducts(pb.Id, codeFilter, nameFilter, section.contentEl);
+        });
       },
       onFailure: function (error) {
         setStatus('Error querying Pricebook2: ' + errorText(error), true);
@@ -268,9 +317,31 @@
     });
   }
 
+  function buildPricebookSection(pricebookName) {
+    var section = document.createElement('div');
+    section.className = 'pricebook-section';
+
+    var heading = document.createElement('h3');
+    heading.className = 'pricebook-title';
+    heading.textContent = pricebookName;
+    section.appendChild(heading);
+
+    var content = document.createElement('div');
+    content.className = 'pricebook-content';
+    content.innerHTML = '<div class="section-empty">Loading products...</div>';
+    section.appendChild(content);
+
+    return { el: section, contentEl: content };
+  }
+
   // ---- Level 0 (Currency) + Level 1 (root, non-component products) ----
 
-  function loadRootProducts(pricebookId) {
+  function loadRootProducts(pricebookId, codeFilter, nameFilter, contentEl) {
+    // Optional, same free-text LIKE convention as the Pricebook filter: blank means
+    // no restriction, and the caller controls their own wildcards (e.g. "%TRJN%").
+    var codeClause = codeFilter ? " AND Product2.ProductCode LIKE '" + escapeSoql(codeFilter) + "'" : '';
+    var nameClause = nameFilter ? " AND Product2.Name LIKE '" + escapeSoql(nameFilter) + "'" : '';
+
     // Try including CurrencyIsoCode first (only valid if the org has
     // multi-currency enabled). Fall back to a plain query otherwise.
     var qWithCurrency =
@@ -279,14 +350,15 @@
       "WHERE Pricebook2Id = '" + pricebookId + "' " +
       "AND IsActive = true " +
       "AND Product2.SBQQ__Component__c = false " +
-      "AND Product2.IsActive = true " +
+      "AND Product2.IsActive = true" +
+      codeClause + nameClause + " " +
       "ORDER BY CurrencyIsoCode, Product2.Name " +
       "LIMIT 2000";
 
     sforce.connection.query(qWithCurrency, {
       onSuccess: function (result) {
         isMultiCurrency = true;
-        renderRootProducts(result.getArray('records'));
+        renderRootProducts(result.getArray('records'), pricebookId, contentEl);
       },
       onFailure: function () {
         // CurrencyIsoCode not available -> single-currency org.
@@ -297,28 +369,35 @@
           "WHERE Pricebook2Id = '" + pricebookId + "' " +
           "AND IsActive = true " +
           "AND Product2.SBQQ__Component__c = false " +
-          "AND Product2.IsActive = true " +
+          "AND Product2.IsActive = true" +
+          codeClause + nameClause + " " +
           "ORDER BY Product2.Name " +
           "LIMIT 2000";
 
         sforce.connection.query(qPlain, {
           onSuccess: function (result2) {
-            renderRootProducts(result2.getArray('records'));
+            renderRootProducts(result2.getArray('records'), pricebookId, contentEl);
           },
           onFailure: function (error2) {
-            setStatus('Error querying PricebookEntry: ' + errorText(error2), true);
+            contentEl.innerHTML = '';
+            var errLi = document.createElement('div');
+            errLi.className = 'section-empty';
+            errLi.textContent = 'Error querying PricebookEntry: ' + errorText(error2);
+            contentEl.appendChild(errLi);
           }
         });
       }
     });
   }
 
-  function renderRootProducts(records) {
-    var container = document.getElementById('treeRoot');
-    container.innerHTML = '';
+  function renderRootProducts(records, pricebookId, contentEl) {
+    contentEl.innerHTML = '';
 
     if (!records || records.length === 0) {
-      setStatus('No top-level (non-component) products found for this pricebook.', true);
+      var emptyMsg = document.createElement('div');
+      emptyMsg.className = 'section-empty';
+      emptyMsg.textContent = 'No top-level (non-component) products found.';
+      contentEl.appendChild(emptyMsg);
       return;
     }
 
@@ -341,19 +420,17 @@
       groups[currency].push(rec);
     });
 
-    setStatus('Loaded ' + records.length + ' product/currency row(s). Click a row to expand its options.', false);
-
     var outerUl = document.createElement('ul');
     outerUl.className = 'tree-root';
 
     groupOrder.forEach(function (currency) {
-      outerUl.appendChild(buildCurrencyGroupNode(currency, groups[currency]));
+      outerUl.appendChild(buildCurrencyGroupNode(currency, groups[currency], pricebookId));
     });
 
-    container.appendChild(outerUl);
+    contentEl.appendChild(outerUl);
   }
 
-  function buildCurrencyGroupNode(currencyIsoCode, productRecords) {
+  function buildCurrencyGroupNode(currencyIsoCode, productRecords, pricebookId) {
     var li = document.createElement('li');
     li.className = 'currency-group';
 
@@ -385,7 +462,8 @@
           null,
           rec.UnitPrice,
           null,
-          currencyIsoCode
+          currencyIsoCode,
+          pricebookId
         )
       );
     });
@@ -403,7 +481,7 @@
 
   // ---- Level 1 product / Level 2+ option nodes ----
 
-  function buildNode(productId, name, code, optionInfo, unitPrice, warningText, currencyIsoCode) {
+  function buildNode(productId, name, code, optionInfo, unitPrice, warningText, currencyIsoCode, pricebookId) {
     var li = document.createElement('li');
     li.className = 'tree-node';
 
@@ -467,7 +545,7 @@
       if (!loaded) {
         loaded = true;
         toggle.textContent = '\u2026'; // …
-        loadOptions(productId, childUl, toggle, currencyIsoCode);
+        loadOptions(productId, childUl, toggle, currencyIsoCode, pricebookId);
       } else {
         var isOpen = childUl.style.display !== 'none';
         childUl.style.display = isOpen ? 'none' : 'block';
@@ -480,7 +558,7 @@
 
   // ---- Level 2+ (bundle options), with PricebookEntry / active checks ----
 
-  function loadOptions(configuredSkuId, childUl, toggle, currencyIsoCode) {
+  function loadOptions(configuredSkuId, childUl, toggle, currencyIsoCode, pricebookId) {
     var q =
       "SELECT SBQQ__OptionalSKU__c, SBQQ__OptionalSKU__r.Name, SBQQ__OptionalSKU__r.ProductCode, " +
       "SBQQ__OptionalSKU__r.IsActive, " +
@@ -513,8 +591,8 @@
           }
         });
 
-        fetchEntryMap(childIds, currencyIsoCode, function (entryMap) {
-          renderOptionRecords(records, entryMap, childUl, toggle, currencyIsoCode);
+        fetchEntryMap(childIds, currencyIsoCode, pricebookId, function (entryMap) {
+          renderOptionRecords(records, entryMap, childUl, toggle, currencyIsoCode, pricebookId);
         });
       },
       onFailure: function (error) {
@@ -528,7 +606,7 @@
     });
   }
 
-  function fetchEntryMap(productIds, currencyIsoCode, callback) {
+  function fetchEntryMap(productIds, currencyIsoCode, pricebookId, callback) {
     if (!productIds || productIds.length === 0) {
       callback({});
       return;
@@ -541,7 +619,7 @@
 
     var q =
       "SELECT Product2Id, UnitPrice FROM PricebookEntry " +
-      "WHERE Pricebook2Id = '" + currentPricebookId + "' " +
+      "WHERE Pricebook2Id = '" + pricebookId + "' " +
       "AND Product2Id IN (" + idsList + ")" +
       currencyFilter +
       " LIMIT 2000";
@@ -565,7 +643,7 @@
     });
   }
 
-  function renderOptionRecords(records, entryMap, childUl, toggle, currencyIsoCode) {
+  function renderOptionRecords(records, entryMap, childUl, toggle, currencyIsoCode, pricebookId) {
     records.forEach(function (rec) {
       var parts = [];
       if (rec.SBQQ__Type__c) parts.push(rec.SBQQ__Type__c);
@@ -592,7 +670,8 @@
           info,
           unitPrice,
           warningText,
-          currencyIsoCode
+          currencyIsoCode,
+          pricebookId
         )
       );
     });

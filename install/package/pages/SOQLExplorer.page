@@ -1010,6 +1010,15 @@ You can also use this tool to visualise the json, for example this one:
             <br/>
             <button class="slds-button slds-button_neutral" onclick="javascript:showQuickGuideDialog();">Quick guide</button>
         </fieldset>
+        <fieldset style="display:inline-block; vertical-align:top; border:1px solid #d8dde6; margin:0; padding:2px 8px;">
+            <legend style="padding:0 4px; font-size:0.75rem;">Tools</legend>
+            <div style="display:flex; flex-direction:column; row-gap:1pt;">
+                <button class="slds-button slds-button_neutral" onclick="javascript:openInNewTab('/apex/CPQBundleExplorer');">CPQ Bundle Explorer</button>
+                <button class="slds-button slds-button_neutral" onclick="javascript:openInNewTab('/apex/CPQProductsAndPricebooks');">CPQ Products and Pricebooks</button>
+                <button class="slds-button slds-button_neutral" onclick="javascript:openInNewTab('/apex/CPQNotActiveUsers');">CPQ Not Active Users</button>
+                <button class="slds-button slds-button_neutral" onclick="javascript:openInNewTab('/apex/CongaNotActiveUsers');">Conga Not Active Users</button>
+            </div>
+        </fieldset>
         </div>
 </div>
 </div> <!-- scope -->

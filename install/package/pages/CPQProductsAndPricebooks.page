@@ -1,0 +1,884 @@
+<apex:page showHeader="false" sidebar="false" applyHtmlTag="false" applyBodyTag="false" docType="html-5.0">
+<!--
+============================================================================
+ TEMP_TRAJAAN_CHECK
+ Purpose : Show a Product Code x Pricebook matrix for products matching a
+           user-typed SOQL LIKE pattern (default '%TRJN%'), built with 100%
+           client-side JS (Salesforce AJAX Toolkit -> SOQL) and NO Apex
+           controller. Each row also shows whether the Product2 itself is
+           Active/Inactive, and a "Bundle" badge if the product has at least
+           one SBQQ__ProductOption__c configured on it (CPQ bundle product).
+ Table   : DataTables.js (MIT licensed, free CDN) for sorting/filtering.
+============================================================================
+-->
+<html>
+<head>
+    <meta charset="UTF-8"/>
+    <title>Check: Products and Pricebooks</title>
+
+    <!-- Salesforce AJAX Toolkit (served by the org itself, no static resource needed) -->
+    <script src="/soap/ajax/58.0/connection.js" type="text/javascript"></script>
+
+    <!-- DataTables (free, MIT licensed) for nice sortable / filterable / drag-reorderable rows -->
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.8/css/jquery.dataTables.min.css" />
+    <link rel="stylesheet" href="https://cdn.datatables.net/rowreorder/1.4.1/css/rowReorder.dataTables.min.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/rowreorder/1.4.1/js/dataTables.rowReorder.min.js"></script>
+
+    <style>
+        :root{
+            --sf-blue:#0176d3;
+            --sf-blue-dark:#014486;
+            --sf-bg:#f3f3f3;
+            --border:#dddbda;
+            --active-green:#2e844a;
+            --inactive-red:#ba0517;
+            --bundle-purple:#8b3fe8;
+        }
+        *{ box-sizing:border-box; }
+        html, body{
+            height:100%;
+            margin:0;
+        }
+        body{
+            font-family:'Salesforce Sans', Arial, Helvetica, sans-serif;
+            background:var(--sf-bg);
+            padding:16px;
+            color:#080707;
+            display:flex;
+        }
+        .page-card{
+            width:100%;
+            height:calc(100vh - 32px);
+            margin:0;
+            background:#ffffff;
+            border-radius:8px;
+            box-shadow:0 2px 8px rgba(0,0,0,0.12);
+            overflow:hidden;
+            display:flex;
+            flex-direction:column;
+        }
+        .page-header{
+            flex:0 0 auto;
+            background:linear-gradient(135deg, var(--sf-blue) 0%, var(--sf-blue-dark) 100%);
+            color:#fff;
+            padding:20px 28px;
+        }
+        .page-header h1{
+            margin:0;
+            font-size:22px;
+            font-weight:600;
+            letter-spacing:.2px;
+        }
+        .page-header p{
+            margin:6px 0 0 0;
+            font-size:12px;
+            opacity:.85;
+        }
+        .controls-row{
+            margin-top:12px;
+            display:flex;
+            flex-wrap:wrap;
+            align-items:center;
+            gap:16px;
+        }
+        .mode-toggle{
+            display:flex;
+            align-items:center;
+        }
+        .filter-bar{
+            display:flex;
+            align-items:center;
+            gap:8px;
+        }
+        .filter-bar label{
+            font-size:12px;
+            opacity:.85;
+        }
+        #filterInput{
+            border:1px solid rgba(255,255,255,0.5);
+            border-radius:16px;
+            padding:6px 12px;
+            font-size:12px;
+            background:rgba(255,255,255,0.12);
+            color:#fff;
+            min-width:160px;
+        }
+        #filterInput::placeholder{
+            color:rgba(255,255,255,0.7);
+        }
+        #filterInput:focus{
+            outline:none;
+            background:rgba(255,255,255,0.22);
+        }
+        #modeBtn, #searchBtn, #exportBtn{
+            background:rgba(255,255,255,0.15);
+            color:#fff;
+            border:1px solid rgba(255,255,255,0.5);
+            border-radius:16px;
+            padding:6px 14px;
+            font-size:12px;
+            cursor:pointer;
+        }
+        #modeBtn:hover, #searchBtn:hover, #exportBtn:hover{
+            background:rgba(255,255,255,0.28);
+        }
+        .toggle-check{
+            display:flex;
+            align-items:center;
+            gap:6px;
+            font-size:12px;
+            opacity:.9;
+            cursor:pointer;
+            user-select:none;
+        }
+        .toggle-check input{
+            cursor:pointer;
+        }
+
+        /* DRAG MODE (default): row reordering enabled, the product-code drag-handle
+           cell is not text-selectable (rowReorder needs to capture mousedown before
+           a text-selection drag starts) */
+        body.select-mode table.dataTable tbody td.product-code{
+            cursor:text !important;
+            -webkit-user-select:text !important;
+            user-select:text !important;
+        }
+        body:not(.select-mode) table.dataTable tbody td.product-code{
+            -webkit-user-select:none !important;
+            user-select:none !important;
+        }
+        .page-body{
+            flex:1 1 auto;
+            min-height:0;
+            display:flex;
+            flex-direction:column;
+            padding:20px 28px 16px 28px;
+        }
+        #statusMsg{
+            flex:0 0 auto;
+            font-size:13px;
+            color:#514f4d;
+            margin-bottom:14px;
+        }
+        #statusMsg.error{ color:var(--inactive-red); font-weight:600; }
+
+        /* Let the DataTables wrapper (and its internal scroll body) grow to fill remaining height */
+        #matrixTable_wrapper{
+            flex:1 1 auto;
+            min-height:0;
+            display:flex;
+            flex-direction:column;
+        }
+        div.dataTables_scroll{
+            flex:1 1 auto;
+            min-height:0;
+            display:flex;
+            flex-direction:column;
+        }
+        div.dataTables_scrollHead{
+            flex:0 0 auto;         /* never shrink the header row */
+            overflow:hidden !important;
+        }
+        div.dataTables_scrollBody{
+            flex:1 1 auto;
+            min-height:0;
+        }
+
+        table.dataTable{
+            border-collapse:collapse !important;
+            font-size:13px;
+        }
+        table.dataTable thead th,
+        div.dataTables_scrollHead table thead th{
+            background:var(--sf-blue);
+            color:#fff;
+            font-weight:600;
+            padding:10px 12px !important;
+            white-space:nowrap;
+        }
+        table.dataTable thead th.row-header-col{
+            background:var(--sf-blue-dark);
+        }
+        table.dataTable thead th.currency-group{
+            background:linear-gradient(135deg, var(--sf-blue-dark) 0%, #002855 100%);
+            text-align:center;
+            font-size:12px;
+            letter-spacing:1px;
+            text-transform:uppercase;
+            border-left:1px solid rgba(255,255,255,0.25);
+        }
+        table.dataTable tbody td{
+            padding:9px 12px;
+            border:1px solid var(--border);
+            text-align:center;
+            white-space:nowrap;
+        }
+        table.dataTable tbody td.product-code{
+            padding:9px 12px;
+            border:1px solid var(--border);
+            background:#f7f9fb;
+            font-weight:600;
+            text-align:left;
+            color:var(--sf-blue-dark);
+            cursor:move;
+            white-space:nowrap;
+        }
+        table.dataTable tbody td.product-code .product-code-text{
+            margin-right:8px;
+        }
+        table.dataTable tbody td.product-code .badge.product-status,
+        table.dataTable tbody td.product-code .badge.bundle{
+            min-width:0;
+            vertical-align:middle;
+            margin-right:6px;
+        }
+        table.dataTable tbody td.product-code .badge.bundle:last-child{
+            margin-right:0;
+        }
+        table.dataTable tbody td.subscription-term{
+            background:#f7f9fb;
+            font-weight:600;
+            color:var(--sf-blue-dark);
+        }
+        /* keep the row-header column readable while horizontally scrolling */
+        div.dataTables_scrollBody{
+            border-bottom:1px solid var(--border);
+            overflow:auto !important;
+        }
+        div.dataTables_wrapper{
+            padding-bottom:0;
+        }
+        table.dataTable tbody tr:hover td,
+        table.dataTable tbody tr:hover th{
+            background:#eef4fb;
+        }
+        .badge{
+            display:inline-block;
+            min-width:78px;
+            padding:3px 8px;
+            border-radius:12px;
+            font-size:11px;
+            font-weight:700;
+            letter-spacing:.3px;
+        }
+        .badge.active{ background:#e3f5e9; color:var(--active-green); }
+        .badge.inactive{ background:#fbe3e6; color:var(--inactive-red); }
+        .badge.bundle{
+            background:linear-gradient(135deg, #f3e8fd 0%, #e9d5ff 100%);
+            color:var(--bundle-purple);
+            box-shadow:0 0 0 1px rgba(139,63,232,0.25) inset;
+        }
+        .cell-empty{ color:#c9c7c5; font-size:15px; }
+
+        /* Unit price is always rendered per cell but only shown when the "Show Unit
+           Price" checkbox is on, so toggling it needs no table rebuild. */
+        .unit-price{
+            display:none;
+            margin-top:4px;
+            font-size:11px;
+            font-weight:600;
+            color:var(--sf-blue-dark);
+        }
+        body.show-unit-price table.dataTable tbody td .unit-price{
+            display:block;
+        }
+
+        div.dataTables_wrapper div.dataTables_filter input{
+            border:1px solid var(--border);
+            border-radius:4px;
+            padding:5px 8px;
+        }
+        div.dataTables_wrapper div.dataTables_length select{
+            border:1px solid var(--border);
+            border-radius:4px;
+            padding:2px 4px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="page-card">
+    <div class="page-header">
+        <h1>Check: Products and Pricebooks</h1>
+        <p id="subtitle">Matrix view of PricebookEntry records where Product Code LIKE '%TRJN%'</p>
+        <div class="controls-row">
+            <div class="filter-bar">
+                <label for="filterInput">Product Code filter (SOQL LIKE):</label>
+                <input type="text" id="filterInput" value="%TRJN%" spellcheck="false" autocomplete="off" />
+                <button id="searchBtn" type="button">Search</button>
+            </div>
+            <label class="toggle-check">
+                <input type="checkbox" id="unitPriceToggle" />
+                Show Unit Price
+            </label>
+            <label class="toggle-check">
+                <input type="checkbox" id="subTermToggle" checked="checked" />
+                Show Subscription Term
+            </label>
+            <label class="toggle-check">
+                <input type="checkbox" id="subTypeToggle" />
+                Show Subscription Type
+            </label>
+            <button id="exportBtn" type="button">📊 Export to Excel</button>
+            <div class="mode-toggle">
+                <button id="modeBtn" type="button">✋ Row drag &amp; drop mode</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="page-body">
+        <div id="statusMsg">Loading data via AJAX Toolkit…</div>
+        <table id="matrixTable" class="display" style="display:none;">
+            <thead>
+                <tr id="headerRowTop"></tr>
+                <tr id="headerRow"></tr>
+            </thead>
+            <tbody id="bodyRows"></tbody>
+        </table>
+    </div>
+</div>
+
+<script type="text/javascript">
+(function () {
+    "use strict";
+
+    // 1. Authenticate the AJAX Toolkit connection using the current session
+    sforce.connection.sessionId = "{!GETSESSIONID()}" !== "" ? "{!GETSESSIONID()}" : "{!$Api.Session_ID}";
+
+    var DEFAULT_FILTER = "%TRJN%";
+    var dt = null;           // current DataTable instance, re-created on every search
+    var dragModeOn = true;   // persists across re-searches
+    var requestSeq = 0;      // bumped on every runQuery() call; guards against out-of-order AJAX responses
+                              // (e.g. searching again before the initial default-filter load has returned)
+                              // overwriting a newer, already-rendered result set
+    var lastMatrixData = null; // snapshot of the currently-rendered search's data model, used by exportToExcel()
+
+    function escapeSoql(value) {
+        return String(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+    }
+
+    // showError() renders via innerHTML, so any user-typed filter value folded into
+    // its message must be HTML-escaped first to avoid a self-XSS via the search box.
+    function escapeHtml(value) {
+        return String(value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+    }
+
+    function buildSoql(filterValue) {
+        return "SELECT Pricebook2.Name, IsActive, UnitPrice, Product2.Id, Product2.ProductCode, Product2.IsActive, " +
+               "Product2.SBQQ__SubscriptionTerm__c, Product2.SBQQ__SubscriptionType__c, CurrencyIsoCode " +
+               "FROM PricebookEntry " +
+               "WHERE Product2.ProductCode LIKE '" + escapeSoql(filterValue) + "'";
+    }
+
+    function formatUnitPrice(value, currency) {
+        if (value === undefined || value === null || value === "") { return ""; }
+        try {
+            return new Intl.NumberFormat(undefined, { style: "currency", currency: currency }).format(value);
+        } catch (e) {
+            return String(value); // currency isn't a valid ISO code Intl recognizes (e.g. our "(No Currency)" placeholder)
+        }
+    }
+
+    function showError(msg) {
+        var el = document.getElementById("statusMsg");
+        el.style.display = "";
+        el.className = "error";
+        el.innerHTML = "Error: " + msg;
+    }
+
+    function appendTextOrDash(cell, text) {
+        if (text === undefined || text === null || text === "") {
+            var dash = document.createElement("span");
+            dash.className = "cell-empty";
+            dash.textContent = "—";
+            cell.appendChild(dash);
+        } else {
+            cell.textContent = text;
+        }
+    }
+
+    // Finds, for the given Product2 Ids, which ones are configured as a CPQ bundle
+    // (i.e. have at least one SBQQ__ProductOption__c pointing at them). Note that
+    // despite its name, SBQQ__ProductOption__c.SBQQ__ConfiguredSKU__c is a lookup
+    // to the parent Product2's Id, not a text SKU/ProductCode (see CPQProductExplorer.page).
+    function loadBundleFlags(productIdByCode, onDone) {
+        var ids = Object.keys(productIdByCode)
+            .map(function (code) { return productIdByCode[code]; })
+            .filter(function (id) { return !!id; });
+
+        if (ids.length === 0) { onDone({}); return; }
+
+        var idList = ids.map(function (id) { return "'" + escapeSoql(id) + "'"; }).join(",");
+        var q = "SELECT SBQQ__ConfiguredSKU__c FROM SBQQ__ProductOption__c " +
+                "WHERE SBQQ__ConfiguredSKU__c IN (" + idList + ")";
+
+        sforce.connection.query(q, {
+            onSuccess: function (result) {
+                var records = result.getArray("records") || [];
+                var bundleIds = {};
+                records.forEach(function (rec) {
+                    if (rec.SBQQ__ConfiguredSKU__c) { bundleIds[rec.SBQQ__ConfiguredSKU__c] = true; }
+                });
+                onDone(bundleIds);
+            },
+            onFailure: function (error) {
+                console.error("Bundle lookup failed", error);
+                onDone({}); // non-fatal: matrix still renders without bundle badges
+            }
+        });
+    }
+
+    function buildMatrix(records, filterValue, seq) {
+        document.getElementById("subtitle").textContent =
+            "Matrix view of PricebookEntry records where Product Code LIKE '" + filterValue + "'";
+
+        if (!records || records.length === 0) {
+            showError("No PricebookEntry records found for Product Code LIKE '" + escapeHtml(filterValue) + "'.");
+            return;
+        }
+
+        var rowSet = {};             // Product2.ProductCode -> true
+        var pbNamesByCurrency = {};  // currency -> { pricebookName -> true }
+        var lookup = {};             // "productCode|||currency|||pricebookName" -> { isActive, unitPrice }
+        var productActive = {};      // Product2.ProductCode -> Product2.IsActive (boolean)
+        var productId = {};          // Product2.ProductCode -> Product2.Id
+        var productSubTerm = {};     // Product2.ProductCode -> Product2.SBQQ__SubscriptionTerm__c (number of months, or null)
+        var productSubType = {};     // Product2.ProductCode -> Product2.SBQQ__SubscriptionType__c (picklist, or null)
+
+        for (var i = 0; i < records.length; i++) {
+            var rec = records[i];
+            var pbName = rec.Pricebook2 && rec.Pricebook2.Name ? rec.Pricebook2.Name : "(Unknown Pricebook)";
+            var currency = rec.CurrencyIsoCode || "(No Currency)";
+            var prodCode = rec.Product2 && rec.Product2.ProductCode ? rec.Product2.ProductCode : "(Unknown Code)";
+            var isActive = (rec.IsActive === true || rec.IsActive === "true");
+
+            rowSet[prodCode] = true;
+            if (!pbNamesByCurrency[currency]) { pbNamesByCurrency[currency] = {}; }
+            pbNamesByCurrency[currency][pbName] = true;
+            lookup[prodCode + "|||" + currency + "|||" + pbName] = { isActive: isActive, unitPrice: rec.UnitPrice };
+
+            if (rec.Product2) {
+                productActive[prodCode] = (rec.Product2.IsActive === true || rec.Product2.IsActive === "true");
+                productId[prodCode] = rec.Product2.Id;
+                productSubTerm[prodCode] = rec.Product2.SBQQ__SubscriptionTerm__c;
+                productSubType[prodCode] = rec.Product2.SBQQ__SubscriptionType__c;
+            }
+        }
+
+        // 2. Sort rows alphabetically, then push this specific product code to the very end
+        var PINNED_LAST_ROW = "TRJN-AEOGEO-BRAND-RPRT_EMEA";
+        var allRowsSorted = Object.keys(rowSet).sort(function (a, b) { return a.localeCompare(b); });
+        var rowsMiddle = allRowsSorted.filter(function (name) { return name !== PINNED_LAST_ROW; });
+        var rowsEnd = allRowsSorted.filter(function (name) { return name === PINNED_LAST_ROW; });
+        var rows = rowsMiddle.concat(rowsEnd);
+
+        var PINNED_COLUMNS_FIRST = [
+            "Standard Price Book",
+            "Nordic CPQ Pricebook",
+            "Swedish Price Book 2026 (SEK)",
+            "Norwegian Price Book 2026 (NOK)",
+            "Swedish Price Book 2026 (EUR)",
+            "Norwegian Price Book 2026 (EUR)",
+            "PRN Premium 2026",
+            "Finnish Price Book 2026 (EUR)"
+        ];
+
+        var PINNED_LAST_PATTERN = /\sPricebook$/;  // matches "<anything> Pricebook", e.g. "BNX Pricebook", "AEOGEO Pricebook"
+
+        // Order the pricebook names within a single currency group using the same
+        // pinned-first / pinned-last rules that used to apply to the flat column list.
+        function orderPricebookNames(pbNameSet) {
+            var allSorted = Object.keys(pbNameSet).sort(function (a, b) { return a.localeCompare(b); });
+            var pinned = PINNED_COLUMNS_FIRST.filter(function (name) { return pbNameSet.hasOwnProperty(name); });
+            var pinnedEnd = allSorted.filter(function (name) {
+                return PINNED_COLUMNS_FIRST.indexOf(name) === -1 && PINNED_LAST_PATTERN.test(name);
+            });
+            var remaining = allSorted.filter(function (name) {
+                return PINNED_COLUMNS_FIRST.indexOf(name) === -1 && !PINNED_LAST_PATTERN.test(name);
+            });
+            return pinned.concat(remaining).concat(pinnedEnd);
+        }
+
+        // 3. Build the two-level column list: currency (level 1) -> pricebook name (level 2)
+        var currencies = Object.keys(pbNamesByCurrency).sort(function (a, b) { return a.localeCompare(b); });
+        var currencyGroups = [];   // [{ currency, pbNames: [...] }]
+        var cols = [];             // flat [{ currency, pbName }] in render order, one entry per leaf column
+
+        currencies.forEach(function (currency) {
+            var pbNames = orderPricebookNames(pbNamesByCurrency[currency]);
+            currencyGroups.push({ currency: currency, pbNames: pbNames });
+            pbNames.forEach(function (pbName) {
+                cols.push({ currency: currency, pbName: pbName });
+            });
+        });
+
+        // 3b. Build the two header rows: top row = currency groups (colspan), second row = pricebook names
+        var headerRowTop = document.getElementById("headerRowTop");
+        var headerRow = document.getElementById("headerRow");
+
+        var thCorner = document.createElement("th");
+        thCorner.className = "row-header-col";
+        thCorner.rowSpan = 2;
+        thCorner.textContent = "Product Code";
+        headerRowTop.appendChild(thCorner);
+
+        var thSubTerm = document.createElement("th");
+        thSubTerm.className = "row-header-col";
+        thSubTerm.rowSpan = 2;
+        thSubTerm.textContent = "Subscription Term";
+        headerRowTop.appendChild(thSubTerm);
+
+        var thSubType = document.createElement("th");
+        thSubType.className = "row-header-col";
+        thSubType.rowSpan = 2;
+        thSubType.textContent = "Subscription Type";
+        headerRowTop.appendChild(thSubType);
+
+        currencyGroups.forEach(function (group) {
+            var thGroup = document.createElement("th");
+            thGroup.className = "currency-group";
+            thGroup.colSpan = group.pbNames.length;
+            thGroup.textContent = group.currency;
+            headerRowTop.appendChild(thGroup);
+        });
+
+        cols.forEach(function (col) {
+            var th = document.createElement("th");
+            // One word per line narrows the column to its widest single word instead of the
+            // whole phrase; <br> forces a break even under the header's white-space:nowrap.
+            col.pbName.split(" ").forEach(function (word, idx) {
+                if (idx > 0) { th.appendChild(document.createElement("br")); }
+                th.appendChild(document.createTextNode(word));
+            });
+            headerRow.appendChild(th);
+        });
+
+        // 4. Build body rows
+        var tbody = document.getElementById("bodyRows");
+        rows.forEach(function (rowName) {
+            var tr = document.createElement("tr");
+
+            var rowHeadCell = document.createElement("td");
+            rowHeadCell.className = "product-code";
+            rowHeadCell.setAttribute("data-product-code", rowName);
+
+            var codeSpan = document.createElement("span");
+            codeSpan.className = "product-code-text";
+            codeSpan.textContent = rowName;
+            rowHeadCell.appendChild(codeSpan);
+
+            var isProdActive = productActive[rowName] === true;
+            var prodBadge = document.createElement("span");
+            prodBadge.className = "badge product-status " + (isProdActive ? "active" : "inactive");
+            prodBadge.textContent = isProdActive ? "Active" : "Inactive";
+            rowHeadCell.appendChild(prodBadge);
+
+            tr.appendChild(rowHeadCell);
+
+            var subTermValue = productSubTerm[rowName];
+            var subTermCell = document.createElement("td");
+            subTermCell.className = "subscription-term";
+            appendTextOrDash(subTermCell, (subTermValue === undefined || subTermValue === null || subTermValue === "") ? "" : (subTermValue + " mo"));
+            tr.appendChild(subTermCell);
+
+            var subTypeCell = document.createElement("td");
+            subTypeCell.className = "subscription-term";
+            appendTextOrDash(subTypeCell, productSubType[rowName]);
+            tr.appendChild(subTypeCell);
+
+            cols.forEach(function (col) {
+                var td = document.createElement("td");
+                var key = rowName + "|||" + col.currency + "|||" + col.pbName;
+                if (Object.prototype.hasOwnProperty.call(lookup, key)) {
+                    var entry = lookup[key];
+                    var span = document.createElement("span");
+                    span.className = "badge " + (entry.isActive ? "active" : "inactive");
+                    span.textContent = entry.isActive ? "Active" : "Inactive";
+                    td.appendChild(span);
+
+                    var priceSpan = document.createElement("span");
+                    priceSpan.className = "unit-price";
+                    priceSpan.textContent = formatUnitPrice(entry.unitPrice, col.currency);
+                    td.appendChild(priceSpan);
+                } else {
+                    var dash = document.createElement("span");
+                    dash.className = "cell-empty";
+                    dash.textContent = "—";
+                    td.appendChild(dash);
+                }
+                tr.appendChild(td);
+            });
+
+            tbody.appendChild(tr);
+        });
+
+        // Snapshot the data model this render is based on so exportToExcel() (triggered by a
+        // separate button click, outside this async flow) can read it without touching the DOM.
+        lastMatrixData = {
+            rows: rows,
+            cols: cols,
+            lookup: lookup,
+            productActive: productActive,
+            productId: productId,
+            productSubTerm: productSubTerm,
+            productSubType: productSubType,
+            bundleIds: {} // filled in once loadBundleFlags() resolves, below
+        };
+
+        // 5. Reveal table, hide status, then activate DataTables
+        document.getElementById("statusMsg").style.display = "none";
+        var tableEl = document.getElementById("matrixTable");
+        tableEl.style.display = "table";
+
+        jQuery(document).ready(function ($) {
+            dt = $("#matrixTable").DataTable({
+                paging: false,        // show all rows, no pagination
+                info: false,          // hide the "Showing 1 to N of N entries" footer text (paging:false already shows every row)
+                order: [], // keep our alphabetical build order by default
+                scrollX: true,        // horizontal scrollbar when columns overflow
+                scrollY: "100%",      // vertical scrollbar; fills the flex-grown wrapper (see CSS)
+                scrollCollapse: true,
+                autoWidth: true,
+                // orderCellsTop left at its default (false): DataTables binds sort clicks to the
+                // BOTTOM header row (the leaf pricebook-name cells) when headers span multiple rows.
+                colReorder: false,    // grouped currency headers (colspan) aren't supported by ColReorder
+                // Column indices are fixed: 0 Product Code, 1 Subscription Term, 2 Subscription
+                // Type, then the currency/pricebook pivot columns from index 3 on.
+                columnDefs: [
+                    { targets: 1, visible: $("#subTermToggle").is(":checked") },
+                    { targets: 2, visible: $("#subTypeToggle").is(":checked") }
+                ],
+                rowReorder: {         // drag the first cell of a row to reorder rows
+                    selector: "td.product-code"
+                }
+            });
+
+            // Re-apply whatever drag/select mode was active before this (re-)build.
+            try { dt.rowReorder.enable(dragModeOn); } catch (e) { console.error("rowReorder.enable failed", e); }
+
+            // Flexbox finishes laying out the container slightly after DataTables' own
+            // initial width calculation runs, so re-sync header/body column widths once
+            // the layout has settled.
+            setTimeout(function () { if (dt) { dt.columns.adjust(); } }, 0);
+
+            // Bundle flags load asynchronously and are appended once resolved, so the
+            // main matrix isn't blocked waiting on a second round-trip. Guard against a
+            // slower, now-stale search's bundle lookup landing after a newer search has
+            // already rebuilt the table (same race this whole `seq` token exists to prevent).
+            loadBundleFlags(productId, function (bundleIds) {
+                if (seq !== requestSeq) { return; }
+                lastMatrixData.bundleIds = bundleIds;
+                rows.forEach(function (code) {
+                    var pid = productId[code];
+                    if (!pid || !bundleIds[pid]) { return; }
+
+                    var cell = tableEl.querySelector('td.product-code[data-product-code="' + CSS.escape(code) + '"]');
+                    if (!cell) { return; }
+
+                    var bundleBadge = document.createElement("span");
+                    bundleBadge.className = "badge bundle";
+                    bundleBadge.textContent = "Bundle";
+                    cell.appendChild(bundleBadge);
+                });
+
+                if (dt) { dt.columns.adjust(); }
+            });
+        });
+    }
+
+    function runQuery(filterValue) {
+        var seq = ++requestSeq; // this call now owns "latest"; any in-flight older call's response gets ignored
+
+        // DataTables.destroy() restores the table to the DOM snapshot it captured at its
+        // OWN initialization time, discarding anything inserted into the DOM afterward. So
+        // this must run — and the DOM must be cleared — BEFORE any new rows are built, or
+        // destroy() (called later, post-build) would silently revert the table back to the
+        // previous search's rows right after we'd just replaced them.
+        if (dt) {
+            dt.destroy();
+            dt = null;
+        }
+
+        var statusEl = document.getElementById("statusMsg");
+        statusEl.className = "";
+        statusEl.style.display = "";
+        statusEl.textContent = "Loading data via AJAX Toolkit…";
+
+        document.getElementById("matrixTable").style.display = "none";
+        document.getElementById("headerRowTop").innerHTML = "";
+        document.getElementById("headerRow").innerHTML = "";
+        document.getElementById("bodyRows").innerHTML = "";
+
+        try {
+            sforce.connection.query(buildSoql(filterValue), {
+                onSuccess: function (result) {
+                    if (seq !== requestSeq) { return; } // a newer search started before this one returned
+                    var records = result.getArray("records");
+                    buildMatrix(records, filterValue, seq);
+                },
+                onFailure: function (error) {
+                    if (seq !== requestSeq) { return; }
+                    showError(error);
+                }
+            });
+        } catch (e) {
+            if (seq === requestSeq) { showError(e.message || e); }
+        }
+    }
+
+    function runSearch() {
+        var filterValue = document.getElementById("filterInput").value.trim();
+        if (!filterValue) {
+            filterValue = DEFAULT_FILTER;
+            document.getElementById("filterInput").value = DEFAULT_FILTER;
+        }
+        runQuery(filterValue);
+    }
+
+    // Exports exactly what's currently on screen: it reads the same "Show ..." checkboxes
+    // that control table column/cell visibility, so hidden columns are left out of the file.
+    // Built from lastMatrixData (the data model snapshot), not scraped from the DOM, since
+    // DataTables' column().visible(false) leaves hidden cells in the DOM rather than removing them.
+    function buildExportTableHtml() {
+        if (!lastMatrixData) { return null; }
+        var d = lastMatrixData;
+        var showSubTerm = document.getElementById("subTermToggle").checked;
+        var showSubType = document.getElementById("subTypeToggle").checked;
+        var showPrice = document.getElementById("unitPriceToggle").checked;
+
+        var headers = ["Product Code", "Product Status", "Bundle"];
+        if (showSubTerm) { headers.push("Subscription Term"); }
+        if (showSubType) { headers.push("Subscription Type"); }
+        d.cols.forEach(function (col) { headers.push(col.currency + " - " + col.pbName); });
+
+        var bodyRowsHtml = d.rows.map(function (rowName) {
+            var cells = [];
+            cells.push(rowName);
+            cells.push(d.productActive[rowName] ? "Active" : "Inactive");
+
+            var pid = d.productId[rowName];
+            cells.push(pid && d.bundleIds[pid] ? "Yes" : "No");
+
+            if (showSubTerm) {
+                var subTerm = d.productSubTerm[rowName];
+                cells.push((subTerm === undefined || subTerm === null || subTerm === "") ? "" : (subTerm + " mo"));
+            }
+            if (showSubType) { cells.push(d.productSubType[rowName] || ""); }
+
+            d.cols.forEach(function (col) {
+                var key = rowName + "|||" + col.currency + "|||" + col.pbName;
+                var entry = d.lookup[key];
+                if (!entry) { cells.push(""); return; }
+                var text = entry.isActive ? "Active" : "Inactive";
+                if (showPrice) {
+                    var priceText = formatUnitPrice(entry.unitPrice, col.currency);
+                    if (priceText) { text += " (" + priceText + ")"; }
+                }
+                cells.push(text);
+            });
+
+            return "<tr>" + cells.map(function (c) { return "<td>" + escapeHtml(c) + "</td>"; }).join("") + "</tr>";
+        }).join("");
+
+        var headHtml = "<tr>" + headers.map(function (h) { return "<th>" + escapeHtml(h) + "</th>"; }).join("") + "</tr>";
+        return "<table border=\"1\"><thead>" + headHtml + "</thead><tbody>" + bodyRowsHtml + "</tbody></table>";
+    }
+
+    // A plain HTML table saved with a .xls extension and the ms-excel MIME type opens
+    // directly in Excel — no XLSX-generation library (and its extra CDN weight) required.
+    function downloadExcel(filename, tableHtml) {
+        var doc = "<html xmlns:o=\"urn:schemas-microsoft-com:office:office\" " +
+            "xmlns:x=\"urn:schemas-microsoft-com:office:excel\" xmlns=\"http://www.w3.org/TR/REC-html40\">" +
+            "<head><meta charset=\"UTF-8\">" +
+            "<!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>" +
+            "<x:Name>Products</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>" +
+            "</x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->" +
+            "</head><body>" + tableHtml + "</body></html>";
+
+        var blob = new Blob([doc], { type: "application/vnd.ms-excel" });
+        var link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(link.href);
+    }
+
+    function exportToExcel() {
+        var tableHtml = buildExportTableHtml();
+        if (!tableHtml) { return; } // no search has completed yet
+        downloadExcel("products-and-pricebooks.xls", tableHtml);
+    }
+
+    // Row-dragging and native text selection both want to own mousedown on the
+    // same row-label cells, so offer an explicit toggle instead of fighting the
+    // browser: one mode drags rows, the other lets you copy text.
+    // Attached once (not per-rebuild) since it operates on the shared `dt` reference.
+    jQuery(document).ready(function ($) {
+        $("#modeBtn").on("click", function () {
+            dragModeOn = !dragModeOn;
+
+            if (dt) {
+                try { dt.rowReorder.enable(dragModeOn); }
+                catch (e) { console.error("rowReorder.enable failed", e); }
+            }
+
+            if (dragModeOn) {
+                document.body.classList.remove("select-mode");
+                $(this).text("✋ Row drag & drop mode");
+            } else {
+                document.body.classList.add("select-mode");
+                $(this).text("🔤 Text-select mode");
+            }
+        });
+
+        $("#searchBtn").on("click", runSearch);
+        $("#filterInput").on("keydown", function (e) {
+            if (e.key === "Enter" || e.keyCode === 13) {
+                e.preventDefault();
+                runSearch();
+            }
+        });
+
+        // Unit price is always rendered into the DOM; this just shows/hides it via a body
+        // class, so toggling doesn't need a table rebuild and its state survives re-searches.
+        document.body.classList.toggle("show-unit-price", $("#unitPriceToggle").is(":checked"));
+        $("#unitPriceToggle").on("change", function () {
+            document.body.classList.toggle("show-unit-price", this.checked);
+            if (dt) { dt.columns.adjust(); }
+        });
+
+        // Subscription Term / Type are real DataTable columns (not always-rendered cells like
+        // unit price), so toggling them uses DataTables' own column visibility API, which
+        // correctly handles the rowspanned header cells too.
+        $("#subTermToggle").on("change", function () { if (dt) { dt.column(1).visible(this.checked); } });
+        $("#subTypeToggle").on("change", function () { if (dt) { dt.column(2).visible(this.checked); } });
+
+        $("#exportBtn").on("click", exportToExcel);
+
+        $(window).on("resize", function () { if (dt) { dt.columns.adjust(); } });
+    });
+
+    // Kick off once DOM is ready
+    function init() {
+        runQuery(document.getElementById("filterInput").value || DEFAULT_FILTER);
+    }
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", init);
+    } else {
+        init();
+    }
+})();
+</script>
+
+</body>
+</html>
+</apex:page>

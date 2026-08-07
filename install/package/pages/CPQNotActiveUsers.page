@@ -1,0 +1,256 @@
+<apex:page lightningstylesheets="true">
+
+<apex:slds />  
+
+
+<!-- 
+     SFDCINIT-4125 EMEA | Discover inactive logins for CPQ and Conga for DACH
+
+     @author Maciej Szymczak, All rights reserved
+     @version 2026.02 
+-->
+
+<script src="../../soap/ajax/64.0/connection.js"></script> 
+
+    <script>
+        sforce.connection.sessionId = "{!$Api.Session_ID}";
+        function download(data, filename, type) {
+        var a = document.createElement("a"),
+            file = new Blob([data], {type: type});
+        if (window.navigator.msSaveOrOpenBlob) // IE10+
+            window.navigator.msSaveOrOpenBlob(file, filename);
+        else { // Others
+            var url = URL.createObjectURL(file);
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(function() {
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);  
+            }, 0); 
+        }
+        }        
+        
+        
+        var url_string = window.location.href;
+        var url = new URL(url_string);
+        var filter = url.searchParams.get("filter");
+    
+        function showTable() {
+            try {
+
+             lastNDays = '30';
+              switch (document.getElementById('select').selectedIndex)
+                {
+                   case 0: lastNDays='30'; break;
+                   case 1: lastNDays='90'; break;
+                   case 2: lastNDays='180'; break;
+                   default: 
+                       alert('Default case'); break;
+                }  
+
+
+                //  ******************************************
+                //  ************ User Stat *******************
+                //  ******************************************
+                var userStat = {};
+                var SOQLuserStat = `
+                         select OwnerId, Owner.Name, count(Id) AllUsed, max(CreatedDate) LastUsed from 
+                         SBQQ__Quote__c
+                         group by OwnerId , Owner.Name
+                    `;                                
+                  var userStatRec=[];
+                  var result = sforce.connection.query(SOQLuserStat);
+                  var queryMore = true;
+                  while (queryMore) {
+                      var recordsChunk = result.getArray("records");
+                      userStatRec= userStatRec.concat(recordsChunk);
+                      if (result.getBoolean("done")) {
+                          queryMore = false;
+                      } else {
+                          result = sforce.connection.queryMore(result.queryLocator);
+                      }
+                  }
+                  for(var i=0; i < userStatRec.length; i++){
+                    userStat[userStatRec[i].OwnerId] = {};
+                    userStat[userStatRec[i].OwnerId].AllUsed = userStatRec[i].AllUsed;
+                    userStat[userStatRec[i].OwnerId].LastUsed = userStatRec[i].LastUsed ;
+                  }                  
+
+
+                //  ******************************************
+                //  ************ User Active *****************
+                //  ******************************************
+                var activeUserFlag = {};
+                var SOQLActiveUsers = `
+                        select OwnerId from 
+                        SBQQ__Quote__c
+                        where createdDate = last_n_days:`+lastNDays +`
+                        group by OwnerId 
+                        order by OwnerId 
+                      `;                                
+                  var ActiveUsers=[];
+                  result = sforce.connection.query(SOQLActiveUsers);
+                  queryMore = true;
+                  while (queryMore) {
+                      var recordsChunk = result.getArray("records");
+                      ActiveUsers= ActiveUsers.concat(recordsChunk);
+                      if (result.getBoolean("done")) {
+                          queryMore = false;
+                      } else {
+                          result = sforce.connection.queryMore(result.queryLocator);
+                      }
+                  }
+                  for(var i=0; i < ActiveUsers.length; i++){
+                    activeUserFlag[ActiveUsers[i].OwnerId] = true;
+                  }                  
+
+                                
+                //  ******************************************
+                //  ************ List of users ***************
+                //  ******************************************
+                var mySOQL = `
+                        select 
+                        Assignee.Id, Assignee.Name, Assignee.Username, Assignee.LastLoginDate, Assignee.IsActive, Assignee.UserRole.Name
+                        from PermissionSetLicenseAssign
+                        where PermissionSetLicense.MasterLabel = 'Salesforce CPQ License'
+                        Order by Assignee.Name
+                    `;                                
+                  var records=[];
+                  result = sforce.connection.query(mySOQL);
+                  queryMore = true;
+                  while (queryMore) {
+                      var recordsChunk = result.getArray("records");
+                      records = records.concat(recordsChunk);
+                      if (result.getBoolean("done")) {
+                          queryMore = false;
+                      } else {
+                          result = sforce.connection.queryMore(result.queryLocator);
+                      }
+                  }
+                  
+                  resultTable='<table class="slds-table slds-table_cell-buffer slds-table_bordered">';
+                  resultTable= resultTable+ '<thead><tr><th>No</th>';
+                  resultTable= resultTable+ '<th>Name</th>';
+                  resultTable= resultTable+ '<th>Username</th>';
+                  resultTable= resultTable+ '<th>Role</th>';
+                  resultTable= resultTable+ '<th>Is Active</th>';
+                  resultTable= resultTable+ '<th>All<br>CPQ<br>Quotes</th>';
+                  resultTable= resultTable+ '<th>CPQ Quote<br>Last Creation Date</th>';
+                  resultTable= resultTable+ '<th>Last Login Date</th>';
+                  resultTable= resultTable+ '</tr></thead><tbody>';
+
+
+                  var SeqNum=1;
+                  for (i = 0; i < records.length; i++) {
+                     showThisRecord = records[i].IsActive=false || !activeUserFlag[records[i].Assignee.Id];
+                     if (showThisRecord) { 
+                         resultTable= resultTable+ '<tr><td>' + SeqNum  + '</td>';
+                         resultTable= resultTable+ '<td>' + '<a href="/'+records[i].Assignee.Id+'">'+records[i].Assignee.Name+'</a>'   + '</td>';
+                         resultTable= resultTable+ '<td>' + records[i].Assignee.Username+ '</td>';
+                         resultTable= resultTable+ '<td>' + ( records[i].Assignee.UserRole ? records[i].Assignee.UserRole.Name : '')+ '</td>';                  
+                         resultTable= resultTable+ '<td>' + records[i].Assignee.IsActive+ '</td>';
+                         resultTable= resultTable+ '<td>' + (userStat[records[i].Assignee.Id] ? userStat[records[i].Assignee.Id].AllUsed:'') + '</td>';
+                         resultTable= resultTable+ '<td>' + (userStat[records[i].Assignee.Id] ? userStat[records[i].Assignee.Id].LastUsed.substring(0,10):'') + '</td>';
+                         resultTable= resultTable+ '<td>' + ( records[i].Assignee.LastLoginDate ? records[i].Assignee.LastLoginDate.substring(0,10) : '') + '</td>';
+                         resultTable= resultTable+ '</tr>';
+                         SeqNum++;
+                     } 
+                  }
+                  resultTable = resultTable + '</tbody></table>';
+                  
+                  //myJsonString = JSON.stringify(records);
+                document.getElementById('divDescribeGlobal').innerHTML = resultTable; 
+                
+                }
+            catch(err)
+            {
+                document.getElementById('divDescribeGlobal').innerHTML = err;
+            }
+        }
+        
+        function downloadHTML() {
+                        filename = 'You can open me in Excel.html';
+                        type = 'text/plain';
+        fileBody =                
+        '<!DOCTYPE html>'
+        +'<html>'
+        +'<header>'
+        +'<style>'
+        +'table {'
+        +'  border-collapse: collapse;'
+        +'}'
+        +'table, th, td {'
+        +'  border: 1px solid;'
+        +'}'
+        +'</style>'
+        +'</header>'
+        +'<body>'
+        +document.getElementById('divDescribeGlobal').innerHTML
+        +'</body>'
+        +'</html>';
+                                        
+        download(fileBody, filename, type);                
+        
+        }         
+                    
+</script>
+
+<body>
+
+<div class="slds-notify slds-notify_alert slds-theme_alert-texture slds-theme_info" role="alert">
+  <h2>NOT ACTIVE CPQ USERS (No new quotes)</h2>
+</div>
+<div class="slds-m-top_xx-small">
+
+   <table>
+   <tr>
+
+   <td>
+        <div class="slds-form-element">
+          <label class="slds-form-element__label" for="select-01">How long user is not active?</label>
+          <div class="slds-form-element__control">
+            <div class="slds-select_container">
+              <select class="slds-select" onchange="showTable();" id="select">
+                <option value="">30 days</option>
+                <option value="">90 days</option>
+                <option value="">180 days</option>
+              </select>
+            </div>
+          </div>
+        </div>  
+   </td>
+   <td>&nbsp;
+   </td>
+
+
+   <td>
+        <div class="slds-form-element">
+          <label class="slds-form-element__label" for="select-01">Download and open report in Excel</label>
+          <div class="slds-form-element__control">
+          <button class="slds-button slds-button_neutral" onclick="javascript:downloadHTML();" >Download</button>
+          </div>
+        </div>  
+   </td>
+
+
+   </tr>
+   
+   </table>
+
+  
+      
+</div>
+<div class="slds-text-body_small">&nbsp;</div>
+
+
+<div id="divDescribeGlobal" style="margin: 5px;"></div>
+
+<script>
+        showTable();
+</script>
+
+</body>
+
+</apex:page>
