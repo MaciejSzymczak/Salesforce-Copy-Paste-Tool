@@ -1,0 +1,607 @@
+<apex:page showHeader="false" sidebar="false" standardStylesheets="false"
+           applyHtmlTag="false" applyBodyTag="false" docType="html-5.0" cache="false">
+<!--
+  CPQ_Product_Overview
+  ---------------------
+  No Apex controller. All data access is done client-side via the
+  Salesforce AJAX Toolkit (SOAP-based sforce.connection.query),
+  authenticated with the current page's session id.
+
+  Data model assumptions:
+    Level 1 (root products):
+      PricebookEntry -> Product2 where Product2.SBQQ__Component__c = false
+      (i.e. products that can be sold standalone / are not pure components)
+      for the Pricebook the user enters.
+
+    Level 2+ (bundle options, expanded lazily on click):
+      SBQQ__ProductOption__c
+        WHERE SBQQ__ConfiguredSKU__c = <parent product Id>
+      -> SBQQ__OptionalSKU__c is the child/option product.
+      Each child is itself queried the same way when expanded, so
+      nested bundles (option that is itself a bundle) render correctly.
+
+  Notes:
+    - Bump the API version in the two script src attributes and the
+      $Api.Partner_Server_URL_XX merge field together if your org
+      needs a different version.
+    - AJAX Toolkit calls run as the logged-in user (session-based),
+      so field/object level security (FLS/CRUD) for SBQQ__ProductOption__c,
+      Product2, PricebookEntry and Pricebook2 must be granted to that user.
+-->
+<html>
+<head>
+<meta charset="UTF-8"/>
+<title>CPQ Product Overview</title>
+
+<script src="/soap/ajax/58.0/connection.js"></script>
+
+<style>
+  body {
+    font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+    background: #f4f6f9;
+    margin: 0;
+    padding: 24px;
+    color: #1a1a1a;
+  }
+  .container {
+    max-width: 900px;
+    margin: 0 auto;
+    background: #fff;
+    border: 1px solid #d8dde3;
+    border-radius: 8px;
+    padding: 24px;
+  }
+  h2 {
+    margin-top: 0;
+    font-size: 20px;
+  }
+  .controls {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .controls input {
+    flex: 1;
+    padding: 8px 10px;
+    border: 1px solid #c9cfd6;
+    border-radius: 4px;
+    font-size: 14px;
+  }
+  .controls button {
+    padding: 8px 18px;
+    background: #0176d3;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .controls button:hover {
+    background: #015bb5;
+  }
+  #status {
+    min-height: 18px;
+    font-size: 13px;
+    margin-bottom: 12px;
+    color: #444;
+  }
+  #status.error {
+    color: #c00;
+  }
+  ul.tree-root, ul.children {
+    list-style: none;
+    margin: 0;
+    padding-left: 18px;
+  }
+  ul.tree-root {
+    padding-left: 0;
+  }
+  li.tree-node {
+    margin: 2px 0;
+  }
+  .node-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .node-row:hover {
+    background: #f0f4f8;
+  }
+  .toggle {
+    display: inline-block;
+    width: 14px;
+    color: #666;
+    font-size: 12px;
+  }
+  .toggle.leaf {
+    visibility: hidden;
+  }
+  .label {
+    font-size: 14px;
+  }
+  .code {
+    display: inline-block;
+    font-family: "SFMono-Regular", Consolas, monospace;
+    font-size: 11px;
+    color: #444;
+    background: #eef1f5;
+    border: 1px solid #d8dde3;
+    border-radius: 3px;
+    padding: 1px 5px;
+    margin-right: 6px;
+  }
+  .meta {
+    color: #888;
+    font-size: 12px;
+  }
+  .pid {
+    display: inline-block;
+    font-family: "SFMono-Regular", Consolas, monospace;
+    font-size: 11px;
+    color: #999;
+    margin-left: 8px;
+  }
+  li.error {
+    color: #c00;
+    font-size: 12px;
+    padding: 4px 6px;
+  }
+  li.currency-group {
+    margin-bottom: 10px;
+  }
+  .currency-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    background: #eef4fb;
+    border: 1px solid #d3e2f2;
+  }
+  .currency-row:hover {
+    background: #e2edf9;
+  }
+  .currency-label {
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 0.03em;
+    color: #0b5cab;
+  }
+  .price {
+    display: inline-block;
+    margin-left: 8px;
+    font-size: 12px;
+    color: #2e844a;
+    font-weight: 600;
+  }
+  .warning {
+    display: inline-block;
+    margin-left: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #c00;
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <h2>CPQ Product Overview</h2>
+
+  <div class="controls">
+    <input type="text" id="pricebookName" placeholder="Enter Pricebook name (e.g. Standard Price Book)"
+           value="C3-Gorkana CPQ Blended Pricebook"
+           onkeydown="if(event.key==='Enter'){loadPricebook();}"/>
+    <button onclick="loadPricebook()">Load</button>
+  </div>
+
+  <div id="status"></div>
+  <div id="treeRoot" class="tree"></div>
+</div>
+
+<script>
+  // Configure the AJAX Toolkit connection using page merge fields.
+  sforce.connection.serverUrl  = '{!$Api.Partner_Server_URL_580}';
+  sforce.connection.sessionId  = '{!$Api.Session_ID}';
+
+  // Set once the Pricebook is resolved; reused by every descendant
+  // level to look up PricebookEntry rows for option children.
+  var currentPricebookId = null;
+  // Whether CurrencyIsoCode is a valid field in this org (multi-currency enabled).
+  var isMultiCurrency = false;
+
+  function escapeSoql(s) {
+    return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  }
+
+  function setStatus(msg, isError) {
+    var el = document.getElementById('status');
+    el.textContent = msg || '';
+    el.className = isError ? 'error' : '';
+  }
+
+  function errorText(error) {
+    if (!error) return 'Unknown error';
+    if (typeof error === 'string') return error;
+    if (error.faultstring) return error.faultstring;
+    if (error.message) return error.message;
+    try { return JSON.stringify(error); } catch (e) { return String(error); }
+  }
+
+  function formatPrice(val) {
+    if (val === undefined || val === null || val === '') return '';
+    var n = Number(val);
+    if (isNaN(n)) return String(val);
+    return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function loadPricebook() {
+    var name = document.getElementById('pricebookName').value.trim();
+    if (!name) {
+      setStatus('Please enter a Pricebook name.', true);
+      return;
+    }
+    document.getElementById('treeRoot').innerHTML = '';
+    currentPricebookId = null;
+    isMultiCurrency = false;
+    setStatus('Loading pricebook...', false);
+
+    var q = "SELECT Id, Name FROM Pricebook2 WHERE Name = '" + escapeSoql(name) + "' LIMIT 1";
+
+    sforce.connection.query(q, {
+      onSuccess: function (result) {
+        var records = result.getArray('records');
+        if (!records || records.length === 0) {
+          setStatus('No Pricebook found with name "' + name + '".', true);
+          return;
+        }
+        currentPricebookId = records[0].Id;
+        loadRootProducts(currentPricebookId);
+      },
+      onFailure: function (error) {
+        setStatus('Error querying Pricebook2: ' + errorText(error), true);
+      }
+    });
+  }
+
+  // ---- Level 0 (Currency) + Level 1 (root, non-component products) ----
+
+  function loadRootProducts(pricebookId) {
+    // Try including CurrencyIsoCode first (only valid if the org has
+    // multi-currency enabled). Fall back to a plain query otherwise.
+    var qWithCurrency =
+      "SELECT Product2Id, Product2.Name, Product2.ProductCode, UnitPrice, CurrencyIsoCode " +
+      "FROM PricebookEntry " +
+      "WHERE Pricebook2Id = '" + pricebookId + "' " +
+      "AND IsActive = true " +
+      "AND Product2.SBQQ__Component__c = false " +
+      "AND Product2.IsActive = true " +
+      "ORDER BY CurrencyIsoCode, Product2.Name " +
+      "LIMIT 2000";
+
+    sforce.connection.query(qWithCurrency, {
+      onSuccess: function (result) {
+        isMultiCurrency = true;
+        renderRootProducts(result.getArray('records'));
+      },
+      onFailure: function () {
+        // CurrencyIsoCode not available -> single-currency org.
+        isMultiCurrency = false;
+        var qPlain =
+          "SELECT Product2Id, Product2.Name, Product2.ProductCode, UnitPrice " +
+          "FROM PricebookEntry " +
+          "WHERE Pricebook2Id = '" + pricebookId + "' " +
+          "AND IsActive = true " +
+          "AND Product2.SBQQ__Component__c = false " +
+          "AND Product2.IsActive = true " +
+          "ORDER BY Product2.Name " +
+          "LIMIT 2000";
+
+        sforce.connection.query(qPlain, {
+          onSuccess: function (result2) {
+            renderRootProducts(result2.getArray('records'));
+          },
+          onFailure: function (error2) {
+            setStatus('Error querying PricebookEntry: ' + errorText(error2), true);
+          }
+        });
+      }
+    });
+  }
+
+  function renderRootProducts(records) {
+    var container = document.getElementById('treeRoot');
+    container.innerHTML = '';
+
+    if (!records || records.length === 0) {
+      setStatus('No top-level (non-component) products found for this pricebook.', true);
+      return;
+    }
+
+    // Group by currency (key '' when the org is single-currency).
+    // Dedupe within a currency group as a safety net against duplicate rows.
+    var groups = {};
+    var groupOrder = [];
+    var seen = {};
+
+    records.forEach(function (rec) {
+      var currency = isMultiCurrency ? (rec.CurrencyIsoCode || '') : '';
+      var dedupeKey = currency + '|' + rec.Product2Id;
+      if (seen[dedupeKey]) return;
+      seen[dedupeKey] = true;
+
+      if (!groups[currency]) {
+        groups[currency] = [];
+        groupOrder.push(currency);
+      }
+      groups[currency].push(rec);
+    });
+
+    setStatus('Loaded ' + records.length + ' product/currency row(s). Click a row to expand its options.', false);
+
+    var outerUl = document.createElement('ul');
+    outerUl.className = 'tree-root';
+
+    groupOrder.forEach(function (currency) {
+      outerUl.appendChild(buildCurrencyGroupNode(currency, groups[currency]));
+    });
+
+    container.appendChild(outerUl);
+  }
+
+  function buildCurrencyGroupNode(currencyIsoCode, productRecords) {
+    var li = document.createElement('li');
+    li.className = 'currency-group';
+
+    var row = document.createElement('div');
+    row.className = 'currency-row';
+
+    var toggle = document.createElement('span');
+    toggle.className = 'toggle';
+    toggle.textContent = '\u25BE'; // ▾ (expanded by default)
+    row.appendChild(toggle);
+
+    var label = document.createElement('span');
+    label.className = 'currency-label';
+    label.textContent = currencyIsoCode ? currencyIsoCode : 'DEFAULT CURRENCY';
+    row.appendChild(label);
+
+    li.appendChild(row);
+
+    var childUl = document.createElement('ul');
+    childUl.className = 'children';
+    childUl.style.display = 'block';
+
+    productRecords.forEach(function (rec) {
+      childUl.appendChild(
+        buildNode(
+          rec.Product2Id,
+          rec.Product2.Name,
+          rec.Product2.ProductCode,
+          null,
+          rec.UnitPrice,
+          null,
+          currencyIsoCode
+        )
+      );
+    });
+
+    li.appendChild(childUl);
+
+    row.onclick = function () {
+      var isOpen = childUl.style.display !== 'none';
+      childUl.style.display = isOpen ? 'none' : 'block';
+      toggle.textContent = isOpen ? '\u25B8' : '\u25BE';
+    };
+
+    return li;
+  }
+
+  // ---- Level 1 product / Level 2+ option nodes ----
+
+  function buildNode(productId, name, code, optionInfo, unitPrice, warningText, currencyIsoCode) {
+    var li = document.createElement('li');
+    li.className = 'tree-node';
+
+    var row = document.createElement('div');
+    row.className = 'node-row';
+
+    var toggle = document.createElement('span');
+    toggle.className = 'toggle';
+    toggle.textContent = '\u25B8'; // ▸
+    row.appendChild(toggle);
+
+    var label = document.createElement('span');
+    label.className = 'label';
+
+    if (code) {
+      var codeSpan = document.createElement('span');
+      codeSpan.className = 'code';
+      codeSpan.textContent = code;
+      label.appendChild(codeSpan);
+    }
+    label.appendChild(document.createTextNode(name));
+
+    if (optionInfo) {
+      var meta = document.createElement('span');
+      meta.className = 'meta';
+      meta.textContent = ' \u2014 ' + optionInfo; // — info
+      label.appendChild(meta);
+    }
+
+    var priceText = formatPrice(unitPrice);
+    if (priceText) {
+      var priceSpan = document.createElement('span');
+      priceSpan.className = 'price';
+      priceSpan.textContent = priceText;
+      label.appendChild(priceSpan);
+    }
+
+    if (warningText) {
+      var warnSpan = document.createElement('span');
+      warnSpan.className = 'warning';
+      warnSpan.textContent = warningText;
+      label.appendChild(warnSpan);
+    }
+
+    row.appendChild(label);
+
+    var pidSpan = document.createElement('span');
+    pidSpan.className = 'pid';
+    pidSpan.textContent = productId;
+    row.appendChild(pidSpan);
+    li.appendChild(row);
+
+    var childUl = document.createElement('ul');
+    childUl.className = 'children';
+    childUl.style.display = 'none';
+    li.appendChild(childUl);
+
+    var loaded = false;
+
+    row.onclick = function () {
+      if (!loaded) {
+        loaded = true;
+        toggle.textContent = '\u2026'; // …
+        loadOptions(productId, childUl, toggle, currencyIsoCode);
+      } else {
+        var isOpen = childUl.style.display !== 'none';
+        childUl.style.display = isOpen ? 'none' : 'block';
+        toggle.textContent = isOpen ? '\u25B8' : '\u25BE'; // ▸ / ▾
+      }
+    };
+
+    return li;
+  }
+
+  // ---- Level 2+ (bundle options), with PricebookEntry / active checks ----
+
+  function loadOptions(configuredSkuId, childUl, toggle, currencyIsoCode) {
+    var q =
+      "SELECT SBQQ__OptionalSKU__c, SBQQ__OptionalSKU__r.Name, SBQQ__OptionalSKU__r.ProductCode, " +
+      "SBQQ__OptionalSKU__r.IsActive, " +
+      "SBQQ__Number__c, SBQQ__Quantity__c, SBQQ__Type__c, SBQQ__Required__c " +
+      "FROM SBQQ__ProductOption__c " +
+      "WHERE SBQQ__ConfiguredSKU__c = '" + configuredSkuId + "' " +
+      "ORDER BY SBQQ__Number__c " +
+      "LIMIT 2000";
+
+    sforce.connection.query(q, {
+      onSuccess: function (result) {
+        var records = result.getArray('records');
+
+        if (!records || records.length === 0) {
+          toggle.textContent = '';
+          toggle.classList.add('leaf');
+          return;
+        }
+
+        // Look up PricebookEntry rows (in the same pricebook, and same
+        // currency as the ancestor root product) for every distinct
+        // child product, so we can flag missing entries and show price.
+        var childIds = [];
+        var seenIds = {};
+        records.forEach(function (rec) {
+          var id = rec.SBQQ__OptionalSKU__c;
+          if (id && !seenIds[id]) {
+            seenIds[id] = true;
+            childIds.push(id);
+          }
+        });
+
+        fetchEntryMap(childIds, currencyIsoCode, function (entryMap) {
+          renderOptionRecords(records, entryMap, childUl, toggle, currencyIsoCode);
+        });
+      },
+      onFailure: function (error) {
+        toggle.textContent = '!';
+        var li = document.createElement('li');
+        li.className = 'error';
+        li.textContent = 'Error loading options: ' + errorText(error);
+        childUl.appendChild(li);
+        childUl.style.display = 'block';
+      }
+    });
+  }
+
+  function fetchEntryMap(productIds, currencyIsoCode, callback) {
+    if (!productIds || productIds.length === 0) {
+      callback({});
+      return;
+    }
+
+    var idsList = productIds.map(function (id) { return "'" + id + "'"; }).join(',');
+    var currencyFilter = (isMultiCurrency && currencyIsoCode)
+      ? " AND CurrencyIsoCode = '" + escapeSoql(currencyIsoCode) + "'"
+      : '';
+
+    var q =
+      "SELECT Product2Id, UnitPrice FROM PricebookEntry " +
+      "WHERE Pricebook2Id = '" + currentPricebookId + "' " +
+      "AND Product2Id IN (" + idsList + ")" +
+      currencyFilter +
+      " LIMIT 2000";
+
+    sforce.connection.query(q, {
+      onSuccess: function (result) {
+        var rows = result.getArray('records');
+        var map = {};
+        (rows || []).forEach(function (row) {
+          // If duplicate rows exist for a product, keep the first one found.
+          if (!(row.Product2Id in map)) {
+            map[row.Product2Id] = row.UnitPrice;
+          }
+        });
+        callback(map);
+      },
+      onFailure: function () {
+        // Treat as "no entries found" rather than blocking the whole tree.
+        callback({});
+      }
+    });
+  }
+
+  function renderOptionRecords(records, entryMap, childUl, toggle, currencyIsoCode) {
+    records.forEach(function (rec) {
+      var parts = [];
+      if (rec.SBQQ__Type__c) parts.push(rec.SBQQ__Type__c);
+      if (rec.SBQQ__Quantity__c) parts.push('Qty ' + rec.SBQQ__Quantity__c);
+      if (rec.SBQQ__Required__c === 'true' || rec.SBQQ__Required__c === true) parts.push('Required');
+      var info = parts.join(', ');
+
+      var childId = rec.SBQQ__OptionalSKU__c;
+      var hasEntry = childId in entryMap;
+      var unitPrice = hasEntry ? entryMap[childId] : null;
+
+      var productIsActive = !(rec.SBQQ__OptionalSKU__r.IsActive === 'false' || rec.SBQQ__OptionalSKU__r.IsActive === false);
+
+      var warnings = [];
+      if (!hasEntry) warnings.push('Missing PriceBookEntry');
+      if (!productIsActive) warnings.push('Inactive Product');
+      var warningText = warnings.length ? warnings.join(', ') : null;
+
+      childUl.appendChild(
+        buildNode(
+          childId,
+          rec.SBQQ__OptionalSKU__r.Name,
+          rec.SBQQ__OptionalSKU__r.ProductCode,
+          info,
+          unitPrice,
+          warningText,
+          currencyIsoCode
+        )
+      );
+    });
+
+    childUl.style.display = 'block';
+    toggle.textContent = '\u25BE'; // ▾
+  }
+</script>
+
+</body>
+</html>
+</apex:page>
