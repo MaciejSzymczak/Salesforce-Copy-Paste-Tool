@@ -92,11 +92,24 @@
             align-items:center;
             gap:8px;
         }
+        .filter-fields{
+            display:flex;
+            flex-direction:column;
+            gap:4px;
+        }
+        .filter-fields .filter-field{
+            display:flex;
+            align-items:center;
+            gap:8px;
+        }
+        .filter-fields .filter-field label{
+            min-width:96px;
+        }
         .filter-bar label{
             font-size:12px;
-            opacity:.85;
+            color:#fff;
         }
-        #filterInput{
+        #filterInput, #pricebookFilterInput{
             border:1px solid rgba(255,255,255,0.5);
             border-radius:16px;
             padding:6px 12px;
@@ -105,10 +118,10 @@
             color:#fff;
             min-width:160px;
         }
-        #filterInput::placeholder{
+        #filterInput::placeholder, #pricebookFilterInput::placeholder{
             color:rgba(255,255,255,0.7);
         }
-        #filterInput:focus{
+        #filterInput:focus, #pricebookFilterInput:focus{
             outline:none;
             background:rgba(255,255,255,0.22);
         }
@@ -123,6 +136,11 @@
         }
         #modeBtn:hover, #searchBtn:hover, #exportBtn:hover{
             background:rgba(255,255,255,0.28);
+        }
+        .show-toggles{
+            display:flex;
+            flex-direction:column;
+            gap:2px;
         }
         .toggle-check{
             display:flex;
@@ -146,6 +164,19 @@
             user-select:text !important;
         }
         body:not(.select-mode) table.dataTable tbody td.product-code{
+            -webkit-user-select:none !important;
+            user-select:none !important;
+        }
+        /* Header cells (pricebook names, currency groups, etc.) are sortable via a click
+           handler, not mousedown-drag like row reordering, so there's no functional reason
+           to block text selection there in drag mode either - but keep it symmetric with
+           the row-header cell above so "select mode" consistently means "everything copyable". */
+        body.select-mode table.dataTable thead th{
+            cursor:text !important;
+            -webkit-user-select:text !important;
+            user-select:text !important;
+        }
+        body:not(.select-mode) table.dataTable thead th{
             -webkit-user-select:none !important;
             user-select:none !important;
         }
@@ -284,12 +315,41 @@
         body.show-unit-price table.dataTable tbody td .unit-price{
             display:block;
         }
-
-        div.dataTables_wrapper div.dataTables_filter input{
-            border:1px solid var(--border);
-            border-radius:4px;
-            padding:5px 8px;
+        /* Same always-rendered / toggle-via-body-class approach as unit price. */
+        .pbe-id{
+            display:none;
+            margin-top:4px;
+            font-size:10px;
+            font-family:"SFMono-Regular", Consolas, monospace;
+            color:#706e6b;
         }
+        body.show-pbe-id table.dataTable tbody td .pbe-id{
+            display:block;
+        }
+        /* Product Name / ProductId render below the Product Code line (block, under the
+           code+badges line), same always-rendered / toggle-via-body-class approach. */
+        .product-name{
+            display:none;
+            margin-top:4px;
+            font-size:11px;
+            font-weight:400;
+            color:#3e3e3c;
+            white-space:normal;
+        }
+        body.show-product-name table.dataTable tbody td.product-code .product-name{
+            display:block;
+        }
+        .product-id{
+            display:none;
+            margin-top:4px;
+            font-size:10px;
+            font-family:"SFMono-Regular", Consolas, monospace;
+            color:#706e6b;
+        }
+        body.show-product-id table.dataTable tbody td.product-code .product-id{
+            display:block;
+        }
+
         div.dataTables_wrapper div.dataTables_length select{
             border:1px solid var(--border);
             border-radius:4px;
@@ -305,22 +365,44 @@
         <p id="subtitle">Matrix view of PricebookEntry records where Product Code LIKE '%TRJN%'</p>
         <div class="controls-row">
             <div class="filter-bar">
-                <label for="filterInput">Product Code filter (SOQL LIKE):</label>
-                <input type="text" id="filterInput" value="%TRJN%" spellcheck="false" autocomplete="off" />
+                <div class="filter-fields">
+                    <div class="filter-field">
+                        <label for="filterInput">Product code</label>
+                        <input type="text" id="filterInput" value="%TRJN%" spellcheck="false" autocomplete="off" />
+                    </div>
+                    <div class="filter-field">
+                        <label for="pricebookFilterInput">Pricebook name</label>
+                        <input type="text" id="pricebookFilterInput" value="" placeholder="(optional, SOQL LIKE)" spellcheck="false" autocomplete="off" />
+                    </div>
+                </div>
                 <button id="searchBtn" type="button">Search</button>
             </div>
-            <label class="toggle-check">
-                <input type="checkbox" id="unitPriceToggle" />
-                Show Unit Price
-            </label>
-            <label class="toggle-check">
-                <input type="checkbox" id="subTermToggle" checked="checked" />
-                Show Subscription Term
-            </label>
-            <label class="toggle-check">
-                <input type="checkbox" id="subTypeToggle" />
-                Show Subscription Type
-            </label>
+            <div class="show-toggles">
+                <label class="toggle-check">
+                    <input type="checkbox" id="unitPriceToggle" />
+                    Show Unit Price
+                </label>
+                <label class="toggle-check">
+                    <input type="checkbox" id="pbeIdToggle" />
+                    Show PriceBookEntryId
+                </label>
+                <label class="toggle-check">
+                    <input type="checkbox" id="productNameToggle" />
+                    Show Product Name
+                </label>
+                <label class="toggle-check">
+                    <input type="checkbox" id="productIdToggle" />
+                    Show ProductId
+                </label>
+                <label class="toggle-check">
+                    <input type="checkbox" id="subTermToggle" checked="checked" />
+                    Show Subscription Term
+                </label>
+                <label class="toggle-check">
+                    <input type="checkbox" id="subTypeToggle" />
+                    Show Subscription Type
+                </label>
+            </div>
             <button id="exportBtn" type="button">📊 Export to Excel</button>
             <div class="mode-toggle">
                 <button id="modeBtn" type="button">✋ Row drag &amp; drop mode</button>
@@ -355,6 +437,44 @@
                               // overwriting a newer, already-rendered result set
     var lastMatrixData = null; // snapshot of the currently-rendered search's data model, used by exportToExcel()
 
+    // Checkbox id -> GET param name, shared between updateUrlWithFilters() (write) and
+    // applyUrlParamsToControls() (read), so a shared link reproduces which "Show ..." toggles were on.
+    var CHECKBOX_PARAMS = {
+        unitPriceToggle: "unitPrice",
+        pbeIdToggle: "pbeId",
+        productNameToggle: "productName",
+        productIdToggle: "productId",
+        subTermToggle: "subTerm",
+        subTypeToggle: "subType"
+    };
+
+    // Runs synchronously, before anything else reads checkbox/input state (in particular before the
+    // jQuery(document).ready(...) block below, which - since this script sits at the end of <body> and
+    // the DOM is already parsed by the time it runs - executes its callback immediately rather than
+    // waiting for a future event, and that callback reads checkbox .checked to set initial body classes).
+    // If this ran later (e.g. inside init()), those initial body classes would be set from the stale,
+    // HTML-authored default checkbox states instead of the URL-driven ones.
+    function applyUrlParamsToControls() {
+        try {
+            var params = new URLSearchParams(window.location.search);
+            var urlProductCode = params.get("productCode");
+            var urlPricebookName = params.get("pricebookName");
+            if (urlProductCode) { document.getElementById("filterInput").value = urlProductCode; }
+            if (urlPricebookName) { document.getElementById("pricebookFilterInput").value = urlPricebookName; }
+
+            Object.keys(CHECKBOX_PARAMS).forEach(function (checkboxId) {
+                if (params.get(CHECKBOX_PARAMS[checkboxId]) !== null) {
+                    document.getElementById(checkboxId).checked = true;
+                }
+            });
+        } catch (e) {
+            // non-fatal: fall back to the hardcoded HTML defaults - but surface it so a real
+            // failure is diagnosable, not silent.
+            console.error("applyUrlParamsToControls failed", e);
+        }
+    }
+    applyUrlParamsToControls();
+
     function escapeSoql(value) {
         return String(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
     }
@@ -370,11 +490,12 @@
             .replace(/'/g, "&#39;");
     }
 
-    function buildSoql(filterValue) {
-        return "SELECT Pricebook2.Name, IsActive, UnitPrice, Product2.Id, Product2.ProductCode, Product2.IsActive, " +
+    function buildSoql(filterValue, pricebookFilterValue) {
+        var pricebookClause = pricebookFilterValue ? " AND Pricebook2.Name LIKE '" + escapeSoql(pricebookFilterValue) + "'" : "";
+        return "SELECT Id, Pricebook2.Name, IsActive, UnitPrice, Product2.Id, Product2.Name, Product2.ProductCode, Product2.IsActive, " +
                "Product2.SBQQ__SubscriptionTerm__c, Product2.SBQQ__SubscriptionType__c, CurrencyIsoCode " +
                "FROM PricebookEntry " +
-               "WHERE Product2.ProductCode LIKE '" + escapeSoql(filterValue) + "'";
+               "WHERE Product2.ProductCode LIKE '" + escapeSoql(filterValue) + "'" + pricebookClause;
     }
 
     function formatUnitPrice(value, currency) {
@@ -435,20 +556,23 @@
         });
     }
 
-    function buildMatrix(records, filterValue, seq) {
+    function buildMatrix(records, filterValue, pricebookFilterValue, seq) {
+        var filterDesc = "Product Code LIKE '" + filterValue + "'" +
+            (pricebookFilterValue ? " AND Pricebook Name LIKE '" + pricebookFilterValue + "'" : "");
         document.getElementById("subtitle").textContent =
-            "Matrix view of PricebookEntry records where Product Code LIKE '" + filterValue + "'";
+            "Matrix view of PricebookEntry records where " + filterDesc;
 
         if (!records || records.length === 0) {
-            showError("No PricebookEntry records found for Product Code LIKE '" + escapeHtml(filterValue) + "'.");
+            showError("No PricebookEntry records found for " + escapeHtml(filterDesc) + ".");
             return;
         }
 
         var rowSet = {};             // Product2.ProductCode -> true
         var pbNamesByCurrency = {};  // currency -> { pricebookName -> true }
-        var lookup = {};             // "productCode|||currency|||pricebookName" -> { isActive, unitPrice }
+        var lookup = {};             // "productCode|||currency|||pricebookName" -> { isActive, unitPrice, pbeId }
         var productActive = {};      // Product2.ProductCode -> Product2.IsActive (boolean)
         var productId = {};          // Product2.ProductCode -> Product2.Id
+        var productName = {};        // Product2.ProductCode -> Product2.Name
         var productSubTerm = {};     // Product2.ProductCode -> Product2.SBQQ__SubscriptionTerm__c (number of months, or null)
         var productSubType = {};     // Product2.ProductCode -> Product2.SBQQ__SubscriptionType__c (picklist, or null)
 
@@ -462,11 +586,12 @@
             rowSet[prodCode] = true;
             if (!pbNamesByCurrency[currency]) { pbNamesByCurrency[currency] = {}; }
             pbNamesByCurrency[currency][pbName] = true;
-            lookup[prodCode + "|||" + currency + "|||" + pbName] = { isActive: isActive, unitPrice: rec.UnitPrice };
+            lookup[prodCode + "|||" + currency + "|||" + pbName] = { isActive: isActive, unitPrice: rec.UnitPrice, pbeId: rec.Id };
 
             if (rec.Product2) {
                 productActive[prodCode] = (rec.Product2.IsActive === true || rec.Product2.IsActive === "true");
                 productId[prodCode] = rec.Product2.Id;
+                productName[prodCode] = rec.Product2.Name;
                 productSubTerm[prodCode] = rec.Product2.SBQQ__SubscriptionTerm__c;
                 productSubType[prodCode] = rec.Product2.SBQQ__SubscriptionType__c;
             }
@@ -580,6 +705,16 @@
             prodBadge.textContent = isProdActive ? "Active" : "Inactive";
             rowHeadCell.appendChild(prodBadge);
 
+            var productNameSpan = document.createElement("span");
+            productNameSpan.className = "product-name";
+            productNameSpan.textContent = productName[rowName] || "";
+            rowHeadCell.appendChild(productNameSpan);
+
+            var productIdSpan = document.createElement("span");
+            productIdSpan.className = "product-id";
+            productIdSpan.textContent = productId[rowName] || "";
+            rowHeadCell.appendChild(productIdSpan);
+
             tr.appendChild(rowHeadCell);
 
             var subTermValue = productSubTerm[rowName];
@@ -607,6 +742,11 @@
                     priceSpan.className = "unit-price";
                     priceSpan.textContent = formatUnitPrice(entry.unitPrice, col.currency);
                     td.appendChild(priceSpan);
+
+                    var pbeIdSpan = document.createElement("span");
+                    pbeIdSpan.className = "pbe-id";
+                    pbeIdSpan.textContent = entry.pbeId || "";
+                    td.appendChild(pbeIdSpan);
                 } else {
                     var dash = document.createElement("span");
                     dash.className = "cell-empty";
@@ -627,6 +767,7 @@
             lookup: lookup,
             productActive: productActive,
             productId: productId,
+            productName: productName,
             productSubTerm: productSubTerm,
             productSubType: productSubType,
             bundleIds: {} // filled in once loadBundleFlags() resolves, below
@@ -641,6 +782,7 @@
             dt = $("#matrixTable").DataTable({
                 paging: false,        // show all rows, no pagination
                 info: false,          // hide the "Showing 1 to N of N entries" footer text (paging:false already shows every row)
+                searching: false,     // hide DataTables' own "Search:" box - redundant with the "Product Code filter (SOQL LIKE)" input above, which re-queries Salesforce
                 order: [], // keep our alphabetical build order by default
                 scrollX: true,        // horizontal scrollbar when columns overflow
                 scrollY: "100%",      // vertical scrollbar; fills the flex-grown wrapper (see CSS)
@@ -693,7 +835,7 @@
         });
     }
 
-    function runQuery(filterValue) {
+    function runQuery(filterValue, pricebookFilterValue) {
         var seq = ++requestSeq; // this call now owns "latest"; any in-flight older call's response gets ignored
 
         // DataTables.destroy() restores the table to the DOM snapshot it captured at its
@@ -717,11 +859,11 @@
         document.getElementById("bodyRows").innerHTML = "";
 
         try {
-            sforce.connection.query(buildSoql(filterValue), {
+            sforce.connection.query(buildSoql(filterValue, pricebookFilterValue), {
                 onSuccess: function (result) {
                     if (seq !== requestSeq) { return; } // a newer search started before this one returned
                     var records = result.getArray("records");
-                    buildMatrix(records, filterValue, seq);
+                    buildMatrix(records, filterValue, pricebookFilterValue, seq);
                 },
                 onFailure: function (error) {
                     if (seq !== requestSeq) { return; }
@@ -733,13 +875,46 @@
         }
     }
 
+    // Keeps the address bar in sync with the current filters AND checked "Show ..." toggles (as GET
+    // params) so the URL is bookmarkable/shareable; applyUrlParamsToControls() above reads these back
+    // as the page's default values on load. replaceState (not pushState) since every search shouldn't
+    // add a new browser-history entry.
+    function updateUrlWithFilters(filterValue, pricebookFilterValue) {
+        try {
+            var params = new URLSearchParams(window.location.search);
+            params.set("productCode", filterValue);
+            if (pricebookFilterValue) {
+                params.set("pricebookName", pricebookFilterValue);
+            } else {
+                params.delete("pricebookName");
+            }
+
+            Object.keys(CHECKBOX_PARAMS).forEach(function (checkboxId) {
+                var paramName = CHECKBOX_PARAMS[checkboxId];
+                if (document.getElementById(checkboxId).checked) {
+                    params.set(paramName, "1");
+                } else {
+                    params.delete(paramName);
+                }
+            });
+
+            window.history.replaceState(null, "", window.location.pathname + "?" + params.toString());
+        } catch (e) {
+            // non-fatal: URL sync is a nice-to-have, never block the actual search over it - but
+            // surface it so a real failure (e.g. blocked replaceState) is diagnosable, not silent.
+            console.error("updateUrlWithFilters failed", e);
+        }
+    }
+
     function runSearch() {
         var filterValue = document.getElementById("filterInput").value.trim();
         if (!filterValue) {
             filterValue = DEFAULT_FILTER;
             document.getElementById("filterInput").value = DEFAULT_FILTER;
         }
-        runQuery(filterValue);
+        var pricebookFilterValue = document.getElementById("pricebookFilterInput").value.trim();
+        updateUrlWithFilters(filterValue, pricebookFilterValue);
+        runQuery(filterValue, pricebookFilterValue);
     }
 
     // Exports exactly what's currently on screen: it reads the same "Show ..." checkboxes
@@ -752,8 +927,13 @@
         var showSubTerm = document.getElementById("subTermToggle").checked;
         var showSubType = document.getElementById("subTypeToggle").checked;
         var showPrice = document.getElementById("unitPriceToggle").checked;
+        var showPbeId = document.getElementById("pbeIdToggle").checked;
+        var showProductName = document.getElementById("productNameToggle").checked;
+        var showProductId = document.getElementById("productIdToggle").checked;
 
         var headers = ["Product Code", "Product Status", "Bundle"];
+        if (showProductName) { headers.push("Product Name"); }
+        if (showProductId) { headers.push("ProductId"); }
         if (showSubTerm) { headers.push("Subscription Term"); }
         if (showSubType) { headers.push("Subscription Type"); }
         d.cols.forEach(function (col) { headers.push(col.currency + " - " + col.pbName); });
@@ -765,6 +945,9 @@
 
             var pid = d.productId[rowName];
             cells.push(pid && d.bundleIds[pid] ? "Yes" : "No");
+
+            if (showProductName) { cells.push(d.productName[rowName] || ""); }
+            if (showProductId) { cells.push(pid || ""); }
 
             if (showSubTerm) {
                 var subTerm = d.productSubTerm[rowName];
@@ -781,6 +964,7 @@
                     var priceText = formatUnitPrice(entry.unitPrice, col.currency);
                     if (priceText) { text += " (" + priceText + ")"; }
                 }
+                if (showPbeId && entry.pbeId) { text += " [" + entry.pbeId + "]"; }
                 cells.push(text);
             });
 
@@ -841,7 +1025,7 @@
         });
 
         $("#searchBtn").on("click", runSearch);
-        $("#filterInput").on("keydown", function (e) {
+        $("#filterInput, #pricebookFilterInput").on("keydown", function (e) {
             if (e.key === "Enter" || e.keyCode === 13) {
                 e.preventDefault();
                 runSearch();
@@ -856,6 +1040,25 @@
             if (dt) { dt.columns.adjust(); }
         });
 
+        // Same always-rendered / toggle-via-body-class approach for the PricebookEntry Id.
+        document.body.classList.toggle("show-pbe-id", $("#pbeIdToggle").is(":checked"));
+        $("#pbeIdToggle").on("change", function () {
+            document.body.classList.toggle("show-pbe-id", this.checked);
+            if (dt) { dt.columns.adjust(); }
+        });
+
+        // Same again for Product Name / ProductId, rendered below the Product Code line.
+        document.body.classList.toggle("show-product-name", $("#productNameToggle").is(":checked"));
+        $("#productNameToggle").on("change", function () {
+            document.body.classList.toggle("show-product-name", this.checked);
+            if (dt) { dt.columns.adjust(); }
+        });
+        document.body.classList.toggle("show-product-id", $("#productIdToggle").is(":checked"));
+        $("#productIdToggle").on("change", function () {
+            document.body.classList.toggle("show-product-id", this.checked);
+            if (dt) { dt.columns.adjust(); }
+        });
+
         // Subscription Term / Type are real DataTable columns (not always-rendered cells like
         // unit price), so toggling them uses DataTables' own column visibility API, which
         // correctly handles the rowspanned header cells too.
@@ -864,12 +1067,33 @@
 
         $("#exportBtn").on("click", exportToExcel);
 
-        $(window).on("resize", function () { if (dt) { dt.columns.adjust(); } });
+        // DataTables' scrollX mode clones the header into a separate table (dataTables_scrollHead)
+        // kept in sync with the body table's column widths. At non-100% browser zoom the two tables'
+        // widths can round to different subpixel values, so the header drifts out of alignment with
+        // the body ("shifted" columns). A resize alone isn't always enough - it can fire before the
+        // browser finishes reflowing at the new zoom factor - so debounce a re-measure shortly after,
+        // and also listen on visualViewport, which fires reliably on zoom/pinch where window resize
+        // sometimes doesn't (or fires with stale layout metrics).
+        var adjustColumnsDebounced = (function () {
+            var timer = null;
+            return function () {
+                if (timer) { clearTimeout(timer); }
+                timer = setTimeout(function () { if (dt) { dt.columns.adjust(); } }, 150);
+            };
+        })();
+        $(window).on("resize", adjustColumnsDebounced);
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener("resize", adjustColumnsDebounced);
+        }
     });
 
-    // Kick off once DOM is ready
+    // Kick off once DOM is ready. Filter inputs and checkboxes were already set from any URL params
+    // by applyUrlParamsToControls() at the top of this script, before the jQuery ready block ran.
     function init() {
-        runQuery(document.getElementById("filterInput").value || DEFAULT_FILTER);
+        runQuery(
+            document.getElementById("filterInput").value || DEFAULT_FILTER,
+            document.getElementById("pricebookFilterInput").value.trim()
+        );
     }
     if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", init);

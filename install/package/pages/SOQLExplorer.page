@@ -271,8 +271,10 @@
                                 var value = rowRecord[headers[j]];
 
                                 var isUrl = urlRegExp.test(value) || javascriptRegExp.test(value);
-                                //Id is the primary key and relationship/subquery columns are objects - never editable
-                                var cellIsEditable = rowIsEditable && headers[j] !== 'Id' && typeof(value) != 'object';
+                                //Id is the primary key and relationship/subquery columns are objects - never editable.
+                                //Note: typeof null === 'object' in JS, so a plain "typeof(value) != 'object'" check
+                                //would also wrongly exclude NULL scalar field values - explicitly allow null through.
+                                var cellIsEditable = rowIsEditable && headers[j] !== 'Id' && (value === null || typeof(value) != 'object');
 
                                 if(isUrl)   // If value is URL we auto-create a link
                                     tbCon += tdRow.format(link.format(value));
@@ -855,6 +857,13 @@
           win.focus();
         }
 
+        function closePage() {
+          //this page is typically opened embedded in a Lightning Experience iframe; navigating
+          //window.location (the iframe) to the my.salesforce.com home page gets blocked by that
+          //domain's X-Frame-Options ("refused to connect"), so navigate the top-level tab instead.
+          window.top.location.href = '/home/home.jsp';
+        }
+
 function executeSelect() {
     switch (document.getElementById('select').selectedIndex)
         {
@@ -902,8 +911,9 @@ function moreActions() {
 
 <body>
 <div class="slds-scope">
-    <div id="header" class="slds-notify slds-notify_alert slds-theme_alert-texture slds-theme_info" role="alert">
+    <div id="header" class="slds-notify slds-notify_alert slds-theme_alert-texture slds-theme_info" role="alert" style="position:relative;">
       <h2>SOQL Explorer</h2>
+      <button class="slds-button slds-button_neutral" style="position:absolute; right:8px; top:50%; transform:translateY(-50%);" onclick="javascript:closePage();">Close</button>
     </div>
     
 <textarea class="slds-textarea" Id="SOQLExp" rows="10" cols="80" style="width:100%; font-family:'Courier New'">
