@@ -76,6 +76,32 @@
             font-size:12px;
             opacity:.85;
         }
+        .page-header-top{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+        }
+        #foldToggleBtn{
+            flex:0 0 auto;
+            background:rgba(255,255,255,0.15);
+            color:#fff;
+            border:1px solid rgba(255,255,255,0.5);
+            border-radius:16px;
+            padding:6px 14px;
+            font-size:12px;
+            cursor:pointer;
+            white-space:nowrap;
+        }
+        #foldToggleBtn:hover{
+            background:rgba(255,255,255,0.28);
+        }
+        /* Folded state hides the subtitle + all filter/toggle/action controls, leaving just the
+           title bar - the header (which can otherwise take up half the screen) collapses down to
+           a single slim row so the matrix table gets the rest of the viewport. */
+        body.header-folded #headerCollapsible{
+            display:none;
+        }
         .controls-row{
             margin-top:12px;
             display:flex;
@@ -86,6 +112,11 @@
         .mode-toggle{
             display:flex;
             align-items:center;
+        }
+        .right-buttons{
+            display:flex;
+            flex-direction:column;
+            gap:6px;
         }
         .filter-bar{
             display:flex;
@@ -326,6 +357,49 @@
         body.show-pbe-id table.dataTable tbody td .pbe-id{
             display:block;
         }
+        /* Same always-rendered / toggle-via-body-class approach, but the text is filled in
+           asynchronously once loadOppCounts() resolves (see script), not from the initial
+           PricebookEntry query results like unit price / pbe-id are. */
+        .opp-count-oli{
+            display:none;
+            margin-top:4px;
+            font-size:11px;
+            font-weight:600;
+            color:#5a4fcf;
+        }
+        body.show-opp-count table.dataTable tbody td .opp-count-oli{
+            display:block;
+        }
+        /* Opp Products Total is a whole column (not a span within an always-visible cell like
+           unit price / pbe-id / opp-count-oli above), so it's hidden/shown via CSS display on the
+           header th and body td themselves - not DataTables' own column().visible() API, which
+           removes hidden columns' cells from the DOM entirely and would silently discard this
+           column's asynchronously-filled content (set once loadOppCounts() resolves) if the column
+           happened to be hidden at that moment. Same "Show Opp Products (last year)" checkbox and
+           show-opp-count body class as opp-count-oli above - one checkbox controls both. */
+        .opp-total-header,
+        table.dataTable tbody td.opp-count-total{
+            display:none;
+        }
+        body.show-opp-count .opp-total-header,
+        body.show-opp-count table.dataTable tbody td.opp-count-total{
+            display:table-cell;
+        }
+        /* Sortable via a manual click handler (see script) rather than DataTables' automatic
+           header-click binding, which - since orderCellsTop is left at its default (false) - only
+           wires up the bottom header row's leaf cells, not this rowSpan=2 top-row cell. */
+        .opp-total-header{
+            cursor:pointer;
+        }
+        .opp-total-header:hover{
+            background:var(--sf-blue) !important;
+        }
+        /* Drill-through link for the per-product total (opens SOQL Explorer filtered to this
+           row's PricebookEntryIds) - color matches the cell's own text instead of the browser's
+           default link blue, keeping the underline as a click affordance. */
+        .opp-total-link{
+            color:var(--sf-blue-dark);
+        }
         /* Product Name / ProductId render below the Product Code line (block, under the
            code+badges line), same always-rendered / toggle-via-body-class approach. */
         .product-name{
@@ -361,7 +435,11 @@
 
 <div class="page-card">
     <div class="page-header">
-        <h1>Check: Products and Pricebooks</h1>
+        <div class="page-header-top">
+            <h1>Check: Products and Pricebooks</h1>
+            <button id="foldToggleBtn" type="button">▲ Fold</button>
+        </div>
+        <div id="headerCollapsible">
         <p id="subtitle">Matrix view of PricebookEntry records where Product Code LIKE '%TRJN%'</p>
         <div class="controls-row">
             <div class="filter-bar">
@@ -402,11 +480,18 @@
                     <input type="checkbox" id="subTypeToggle" />
                     Show Subscription Type
                 </label>
+                <label class="toggle-check">
+                    <input type="checkbox" id="oppCountToggle" />
+                    Show Opp Products (last year)
+                </label>
             </div>
-            <button id="exportBtn" type="button">📊 Export to Excel</button>
-            <div class="mode-toggle">
-                <button id="modeBtn" type="button">✋ Row drag &amp; drop mode</button>
+            <div class="right-buttons">
+                <button id="exportBtn" type="button">📊 Export to Excel</button>
+                <div class="mode-toggle">
+                    <button id="modeBtn" type="button">✋ Row drag &amp; drop mode</button>
+                </div>
             </div>
+        </div>
         </div>
     </div>
 
@@ -445,7 +530,8 @@
         productNameToggle: "productName",
         productIdToggle: "productId",
         subTermToggle: "subTerm",
-        subTypeToggle: "subType"
+        subTypeToggle: "subType",
+        oppCountToggle: "oppCount"
     };
 
     // Runs synchronously, before anything else reads checkbox/input state (in particular before the
@@ -479,6 +565,66 @@
         return String(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
     }
 
+    // sforce.connection.query() only returns a single batch of matching records (the AJAX
+    // Toolkit's default batch size, ~500-2000 depending on org/API version); when a query
+    // matches more rows than that, the QueryResult comes back with done=false and a queryLocator that
+    // must be fed into queryMore() to fetch each subsequent batch. Without this, a broad
+    // filter (e.g. Product Code "%") that matches thousands of PricebookEntry rows would
+    // silently return only the first batch - whichever products/pricebooks happen to sort
+    // into it - instead of the full result set.
+    function queryAll(soql, onDone, onError) {
+        var allRecords = [];
+        function handleResult(result) {
+            allRecords = allRecords.concat(result.getArray("records") || []);
+            if (result.getBoolean("done")) {
+                onDone(allRecords);
+            } else {
+                // queryLocator is a raw property on the result object in this AJAX Toolkit
+                // version, not a getQueryLocator() accessor method (unlike getArray/getBoolean).
+                sforce.connection.queryMore(result.queryLocator, {
+                    onSuccess: handleResult,
+                    onFailure: onError
+                });
+            }
+        }
+        sforce.connection.query(soql, {
+            onSuccess: handleResult,
+            onFailure: onError
+        });
+    }
+
+    // Salesforce rejects any SOQL statement over 100,000 characters. Building one query with an
+    // IN (...) clause listing every Id from a large result set (loadBundleFlags / loadOppCounts,
+    // below - one Id per row or per matrix cell) can blow past that on a big enough search, so the
+    // Id list is split into chunks that stay comfortably under the limit, queried separately via
+    // queryAll() above, and merged into a single record list before onDone() is called once.
+    var MAX_IDS_PER_QUERY_CHUNK = 3000; // ~3000 * ~21 chars ("'xxxxxxxxxxxxxxxxxx',") = ~63,000 chars, well under the 100,000 cap
+    function queryAllChunked(ids, buildQueryForChunk, onDone, onError) {
+        if (ids.length === 0) { onDone([]); return; }
+
+        var chunks = [];
+        for (var i = 0; i < ids.length; i += MAX_IDS_PER_QUERY_CHUNK) {
+            chunks.push(ids.slice(i, i + MAX_IDS_PER_QUERY_CHUNK));
+        }
+
+        var allRecords = [];
+        var remaining = chunks.length;
+        var failed = false;
+
+        chunks.forEach(function (chunk) {
+            queryAll(buildQueryForChunk(chunk), function (records) {
+                if (failed) { return; }
+                allRecords = allRecords.concat(records);
+                remaining--;
+                if (remaining === 0) { onDone(allRecords); }
+            }, function (error) {
+                if (failed) { return; }
+                failed = true;
+                onError(error);
+            });
+        });
+    }
+
     // showError() renders via innerHTML, so any user-typed filter value folded into
     // its message must be HTML-escaped first to avoid a self-XSS via the search box.
     function escapeHtml(value) {
@@ -496,6 +642,24 @@
                "Product2.SBQQ__SubscriptionTerm__c, Product2.SBQQ__SubscriptionType__c, CurrencyIsoCode " +
                "FROM PricebookEntry " +
                "WHERE Product2.ProductCode LIKE '" + escapeSoql(filterValue) + "'" + pricebookClause;
+    }
+
+    // window.location.origin (not a hardcoded org domain) so these drill-through links work on
+    // any org/sandbox this page is installed in - the VF page is always served from its own
+    // org's Visualforce domain, so the origin it's running on IS the right one to link back into.
+    var SOQL_EXPLORER_BASE = window.location.origin + "/apex/SOQLExplorer";
+    function buildOppExplorerUrl(pbeId) {
+        var query = "select * from opportunityLineItem where PriceBookEntryId='" + pbeId + "' AND CreatedDate = LAST_N_DAYS:365";
+        return SOQL_EXPLORER_BASE + "?q=" + encodeURIComponent(query) + "&flatView=false";
+    }
+    // Product-level total drill-through: filters by the exact PricebookEntryIds that were
+    // actually summed into that row's total (i.e. only the pricebooks currently in view, per
+    // the active search filters) - not by Product2Id, which would also pull in OpportunityLineItem
+    // rows against PricebookEntries outside the current filter and no longer match the shown total.
+    function buildRowOppExplorerUrl(pbeIds) {
+        var idList = pbeIds.map(function (id) { return "'" + id + "'"; }).join(",");
+        var query = "select * from opportunityLineItem where PricebookEntryId in (" + idList + ") AND CreatedDate = LAST_N_DAYS:365";
+        return SOQL_EXPLORER_BASE + "?q=" + encodeURIComponent(query) + "&flatView=false";
     }
 
     function formatUnitPrice(value, currency) {
@@ -536,23 +700,48 @@
 
         if (ids.length === 0) { onDone({}); return; }
 
-        var idList = ids.map(function (id) { return "'" + escapeSoql(id) + "'"; }).join(",");
-        var q = "SELECT SBQQ__ConfiguredSKU__c FROM SBQQ__ProductOption__c " +
-                "WHERE SBQQ__ConfiguredSKU__c IN (" + idList + ")";
+        queryAllChunked(ids, function (chunkIds) {
+            var idList = chunkIds.map(function (id) { return "'" + escapeSoql(id) + "'"; }).join(",");
+            return "SELECT SBQQ__ConfiguredSKU__c FROM SBQQ__ProductOption__c " +
+                   "WHERE SBQQ__ConfiguredSKU__c IN (" + idList + ")";
+        }, function (records) {
+            var bundleIds = {};
+            records.forEach(function (rec) {
+                if (rec.SBQQ__ConfiguredSKU__c) { bundleIds[rec.SBQQ__ConfiguredSKU__c] = true; }
+            });
+            onDone(bundleIds);
+        }, function (error) {
+            console.error("Bundle lookup failed", error);
+            onDone({}); // non-fatal: matrix still renders without bundle badges
+        });
+    }
 
-        sforce.connection.query(q, {
-            onSuccess: function (result) {
-                var records = result.getArray("records") || [];
-                var bundleIds = {};
-                records.forEach(function (rec) {
-                    if (rec.SBQQ__ConfiguredSKU__c) { bundleIds[rec.SBQQ__ConfiguredSKU__c] = true; }
-                });
-                onDone(bundleIds);
-            },
-            onFailure: function (error) {
-                console.error("Bundle lookup failed", error);
-                onDone({}); // non-fatal: matrix still renders without bundle badges
-            }
+    // Counts OpportunityLineItem records created in roughly the last year against each
+    // PricebookEntry Id from this search's results. Single grouped aggregate query (not one
+    // query per cell), same IN-clause approach as loadBundleFlags() above - but keyed by
+    // PricebookEntry Id (one per matrix cell) rather than Product2 Id (one per row), so the
+    // IN-clause can be considerably larger for broad searches.
+    function loadOppCounts(pbeIds, onDone) {
+        var ids = (pbeIds || []).filter(function (id) { return !!id; });
+        if (ids.length === 0) { onDone({}); return; }
+
+        queryAllChunked(ids, function (chunkIds) {
+            var idList = chunkIds.map(function (id) { return "'" + escapeSoql(id) + "'"; }).join(",");
+            return "SELECT PricebookEntryId, COUNT(Id) cnt FROM OpportunityLineItem " +
+                   "WHERE PricebookEntryId IN (" + idList + ") AND CreatedDate = LAST_N_DAYS:365 " +
+                   "GROUP BY PricebookEntryId";
+        }, function (records) {
+            var counts = {};
+            records.forEach(function (rec) {
+                // The AJAX Toolkit parses SOAP/XML field values as strings, so rec.cnt is "2",
+                // not 2 - left uncoerced, summing several of these in the per-row total (below)
+                // silently does string concatenation instead of addition (e.g. "0"+"1"+"0"+... ).
+                if (rec.PricebookEntryId) { counts[rec.PricebookEntryId] = Number(rec.cnt) || 0; }
+            });
+            onDone(counts);
+        }, function (error) {
+            console.error("Opp product count lookup failed", error);
+            onDone({}); // non-fatal: matrix still renders without opp counts
         });
     }
 
@@ -575,6 +764,8 @@
         var productName = {};        // Product2.ProductCode -> Product2.Name
         var productSubTerm = {};     // Product2.ProductCode -> Product2.SBQQ__SubscriptionTerm__c (number of months, or null)
         var productSubType = {};     // Product2.ProductCode -> Product2.SBQQ__SubscriptionType__c (picklist, or null)
+        var productPbeIds = {};      // Product2.ProductCode -> [PricebookEntry Id, ...], for the per-product opp-count total column
+        var pbeIds = [];             // PricebookEntry Ids from this search's records, for the opp-count query
 
         for (var i = 0; i < records.length; i++) {
             var rec = records[i];
@@ -587,6 +778,11 @@
             if (!pbNamesByCurrency[currency]) { pbNamesByCurrency[currency] = {}; }
             pbNamesByCurrency[currency][pbName] = true;
             lookup[prodCode + "|||" + currency + "|||" + pbName] = { isActive: isActive, unitPrice: rec.UnitPrice, pbeId: rec.Id };
+            if (rec.Id) {
+                pbeIds.push(rec.Id);
+                if (!productPbeIds[prodCode]) { productPbeIds[prodCode] = []; }
+                productPbeIds[prodCode].push(rec.Id);
+            }
 
             if (rec.Product2) {
                 productActive[prodCode] = (rec.Product2.IsActive === true || rec.Product2.IsActive === "true");
@@ -654,6 +850,17 @@
         thCorner.textContent = "Product Code";
         headerRowTop.appendChild(thCorner);
 
+        var thOppTotal = document.createElement("th");
+        // "sorting" is DataTables' own neutral-state class (double-arrow icon via its loaded
+        // CSS); kept in sync with the actual sort state by the order.dt handler below once the
+        // user clicks it or sorts some other column.
+        thOppTotal.className = "row-header-col opp-total-header sorting";
+        thOppTotal.rowSpan = 2;
+        thOppTotal.appendChild(document.createTextNode("Opp"));
+        thOppTotal.appendChild(document.createElement("br"));
+        thOppTotal.appendChild(document.createTextNode("Products(365d)"));
+        headerRowTop.appendChild(thOppTotal);
+
         var thSubTerm = document.createElement("th");
         thSubTerm.className = "row-header-col";
         thSubTerm.rowSpan = 2;
@@ -717,6 +924,23 @@
 
             tr.appendChild(rowHeadCell);
 
+            // Filled in asynchronously once loadOppCounts() resolves, below - summed across
+            // all of this product's PricebookEntries (all cells in this row), not just one.
+            var oppTotalCell = document.createElement("td");
+            oppTotalCell.className = "subscription-term opp-count-total";
+            tr.appendChild(oppTotalCell);
+
+            var oppTotalLink = document.createElement("a");
+            oppTotalLink.className = "opp-total-link";
+            oppTotalLink.setAttribute("data-product-code", rowName);
+            var rowPbeIds = productPbeIds[rowName] || [];
+            if (rowPbeIds.length > 0) {
+                oppTotalLink.href = buildRowOppExplorerUrl(rowPbeIds);
+                oppTotalLink.target = "_blank";
+                oppTotalLink.rel = "noopener";
+            }
+            oppTotalCell.appendChild(oppTotalLink);
+
             var subTermValue = productSubTerm[rowName];
             var subTermCell = document.createElement("td");
             subTermCell.className = "subscription-term";
@@ -747,6 +971,16 @@
                     pbeIdSpan.className = "pbe-id";
                     pbeIdSpan.textContent = entry.pbeId || "";
                     td.appendChild(pbeIdSpan);
+
+                    var oppCountLink = document.createElement("a");
+                    oppCountLink.className = "opp-count-oli";
+                    oppCountLink.setAttribute("data-pbe-id", entry.pbeId || "");
+                    if (entry.pbeId) {
+                        oppCountLink.href = buildOppExplorerUrl(entry.pbeId);
+                        oppCountLink.target = "_blank";
+                        oppCountLink.rel = "noopener";
+                    }
+                    td.appendChild(oppCountLink);
                 } else {
                     var dash = document.createElement("span");
                     dash.className = "cell-empty";
@@ -770,7 +1004,9 @@
             productName: productName,
             productSubTerm: productSubTerm,
             productSubType: productSubType,
-            bundleIds: {} // filled in once loadBundleFlags() resolves, below
+            productPbeIds: productPbeIds,
+            bundleIds: {}, // filled in once loadBundleFlags() resolves, below
+            oppCounts: {}  // filled in once loadOppCounts() resolves, below
         };
 
         // 5. Reveal table, hide status, then activate DataTables
@@ -787,15 +1023,38 @@
                 scrollX: true,        // horizontal scrollbar when columns overflow
                 scrollY: "100%",      // vertical scrollbar; fills the flex-grown wrapper (see CSS)
                 scrollCollapse: true,
-                autoWidth: true,
+                // autoWidth (false) - DataTables' own JS-based column width calculation (used to
+                // build the cloned scrollX header table) rounds pixel widths independently for the
+                // header clone vs. the body table, and that rounding is zoom-level dependent -
+                // confirmed by header/body drifting apart more or less depending on browser zoom,
+                // worse with fewer columns (e.g. after a narrow Pricebook Name filter) since the
+                // same rounding error is a bigger fraction of a wider column. Disabling autoWidth
+                // hands width calculation to the browser's native table layout instead, which
+                // sizes the header clone and body table consistently regardless of zoom.
+                autoWidth: false,
                 // orderCellsTop left at its default (false): DataTables binds sort clicks to the
                 // BOTTOM header row (the leaf pricebook-name cells) when headers span multiple rows.
                 colReorder: false,    // grouped currency headers (colspan) aren't supported by ColReorder
-                // Column indices are fixed: 0 Product Code, 1 Subscription Term, 2 Subscription
-                // Type, then the currency/pricebook pivot columns from index 3 on.
+                // Column indices are fixed: 0 Product Code, 1 Opp Products Total, 2 Subscription
+                // Term, 3 Subscription Type, then the currency/pricebook pivot columns from index 4 on.
+                // Column 1 is NOT toggled here via DataTables' own visible: option like columns 2/3
+                // below - it's filled in asynchronously (once loadOppCounts() resolves, below), and
+                // DataTables' column().visible(false) removes a hidden column's cells from the DOM
+                // entirely, which would silently discard that async fill if the column started
+                // hidden. Its show/hide is handled by CSS instead (see .opp-total-header /
+                // .opp-count-total rules, keyed off the same show-opp-count body class).
+                // Column 1's type is forced to "html-num" (a built-in DataTables type that strips
+                // HTML tags before parsing) for two reasons: (1) DataTables auto-detects a
+                // column's sort type from its data at init time, but column 1's cells are still
+                // empty then (see above), so auto-detection would otherwise lock in a plain
+                // string comparison ("10" sorting before "2") once the real numbers land
+                // asynchronously; (2) the cell's number is wrapped in an <a> (the drill-through
+                // link), so plain "num" would try to parseFloat() the raw "<a ...>5</a>" markup
+                // and get NaN for every row - "html-num" strips the tag first.
                 columnDefs: [
-                    { targets: 1, visible: $("#subTermToggle").is(":checked") },
-                    { targets: 2, visible: $("#subTypeToggle").is(":checked") }
+                    { targets: 1, type: "html-num" },
+                    { targets: 2, visible: $("#subTermToggle").is(":checked") },
+                    { targets: 3, visible: $("#subTypeToggle").is(":checked") }
                 ],
                 rowReorder: {         // drag the first cell of a row to reorder rows
                     selector: "td.product-code"
@@ -832,6 +1091,44 @@
 
                 if (dt) { dt.columns.adjust(); }
             });
+
+            // Opp-product counts load asynchronously in parallel with the bundle-flag lookup
+            // above (two independent round-trips, no reason to chain them); same `seq` guard
+            // discards a stale response if a newer search has started since this one fired.
+            loadOppCounts(pbeIds, function (oppCounts) {
+                if (seq !== requestSeq) { return; }
+                lastMatrixData.oppCounts = oppCounts;
+                tableEl.querySelectorAll(".opp-count-oli[data-pbe-id]").forEach(function (link) {
+                    var pbeId = link.getAttribute("data-pbe-id");
+                    if (!pbeId) { return; }
+                    link.textContent = oppCounts[pbeId] || 0;
+                });
+
+                // Per-product total: summed across all of this row's PricebookEntries (every
+                // pivot cell in the row), not just one - uses productPbeIds built above. Only the
+                // link's text is filled in here - its href (the drill-through URL) was already
+                // set synchronously at cell-build time, since productPbeIds is known up front.
+                tableEl.querySelectorAll(".opp-total-link[data-product-code]").forEach(function (link) {
+                    var code = link.getAttribute("data-product-code");
+                    var ids = productPbeIds[code] || [];
+                    var total = ids.reduce(function (sum, id) { return sum + (oppCounts[id] || 0); }, 0);
+                    link.textContent = total;
+                });
+
+                // Column 1's cells were set directly via textContent above, bypassing DataTables'
+                // own data APIs, so its cached sort data (captured empty at init time) is now
+                // stale - invalidate it from the live DOM so a later click on the "Opp
+                // Products(365d)" header (see the delegated click handler below) sorts by the
+                // actual totals instead of the empty values that were there at page load. No
+                // dt.draw() here - invalidate() alone doesn't force a redraw, and forcing one
+                // here (via scrollX's header-clone resync) while flex layout may still be
+                // settling right after a fast query response caused header/body misalignment;
+                // the click handler's own .draw() picks up this now-fresh cache whenever needed.
+                if (dt) {
+                    dt.cells(null, 1).invalidate("dom");
+                    dt.columns.adjust();
+                }
+            });
         });
     }
 
@@ -859,16 +1156,12 @@
         document.getElementById("bodyRows").innerHTML = "";
 
         try {
-            sforce.connection.query(buildSoql(filterValue, pricebookFilterValue), {
-                onSuccess: function (result) {
-                    if (seq !== requestSeq) { return; } // a newer search started before this one returned
-                    var records = result.getArray("records");
-                    buildMatrix(records, filterValue, pricebookFilterValue, seq);
-                },
-                onFailure: function (error) {
-                    if (seq !== requestSeq) { return; }
-                    showError(error);
-                }
+            queryAll(buildSoql(filterValue, pricebookFilterValue), function (records) {
+                if (seq !== requestSeq) { return; } // a newer search started before this one returned
+                buildMatrix(records, filterValue, pricebookFilterValue, seq);
+            }, function (error) {
+                if (seq !== requestSeq) { return; }
+                showError(error);
             });
         } catch (e) {
             if (seq === requestSeq) { showError(e.message || e); }
@@ -930,8 +1223,10 @@
         var showPbeId = document.getElementById("pbeIdToggle").checked;
         var showProductName = document.getElementById("productNameToggle").checked;
         var showProductId = document.getElementById("productIdToggle").checked;
+        var showOppCount = document.getElementById("oppCountToggle").checked;
 
         var headers = ["Product Code", "Product Status", "Bundle"];
+        if (showOppCount) { headers.push("Opp Products(365d)"); }
         if (showProductName) { headers.push("Product Name"); }
         if (showProductId) { headers.push("ProductId"); }
         if (showSubTerm) { headers.push("Subscription Term"); }
@@ -946,6 +1241,11 @@
             var pid = d.productId[rowName];
             cells.push(pid && d.bundleIds[pid] ? "Yes" : "No");
 
+            if (showOppCount) {
+                var rowPbeIds = (d.productPbeIds && d.productPbeIds[rowName]) || [];
+                var rowTotal = rowPbeIds.reduce(function (sum, id) { return sum + ((d.oppCounts && d.oppCounts[id]) || 0); }, 0);
+                cells.push(String(rowTotal));
+            }
             if (showProductName) { cells.push(d.productName[rowName] || ""); }
             if (showProductId) { cells.push(pid || ""); }
 
@@ -965,6 +1265,10 @@
                     if (priceText) { text += " (" + priceText + ")"; }
                 }
                 if (showPbeId && entry.pbeId) { text += " [" + entry.pbeId + "]"; }
+                if (showOppCount) {
+                    var oppCount = (d.oppCounts && d.oppCounts[entry.pbeId]) || 0;
+                    text += " {OppCount365d: " + oppCount + "}";
+                }
                 cells.push(text);
             });
 
@@ -1059,13 +1363,58 @@
             if (dt) { dt.columns.adjust(); }
         });
 
+        // Same always-rendered / toggle-via-body-class approach; the link text itself is filled
+        // in asynchronously by loadOppCounts() once buildMatrix()'s table exists, but toggling
+        // visibility here only needs to flip the body class regardless of whether that's resolved yet.
+        document.body.classList.toggle("show-opp-count", $("#oppCountToggle").is(":checked"));
+        $("#oppCountToggle").on("change", function () {
+            document.body.classList.toggle("show-opp-count", this.checked);
+            if (dt) { dt.columns.adjust(); }
+        });
+
         // Subscription Term / Type are real DataTable columns (not always-rendered cells like
         // unit price), so toggling them uses DataTables' own column visibility API, which
-        // correctly handles the rowspanned header cells too.
-        $("#subTermToggle").on("change", function () { if (dt) { dt.column(1).visible(this.checked); } });
-        $("#subTypeToggle").on("change", function () { if (dt) { dt.column(2).visible(this.checked); } });
+        // correctly handles the rowspanned header cells too. (Opp Products Total, column 1, is
+        // handled by the oppCountToggle CSS toggle above instead - see the columnDefs comment.)
+        $("#subTermToggle").on("change", function () { if (dt) { dt.column(2).visible(this.checked); } });
+        $("#subTypeToggle").on("change", function () { if (dt) { dt.column(3).visible(this.checked); } });
 
         $("#exportBtn").on("click", exportToExcel);
+
+        // Folds away the subtitle + filter/toggle/action controls so the header shrinks to a
+        // single title row, giving the matrix table the rest of the viewport. Unfolded (expanded)
+        // by default; this is purely a display toggle, no state persisted across page loads.
+        $("#foldToggleBtn").on("click", function () {
+            var folded = document.body.classList.toggle("header-folded");
+            $(this).text(folded ? "▼ Unfold" : "▲ Fold");
+            // The header's height changes, which changes how much vertical space is left for
+            // the flex-grown table wrapper, so DataTables' own scrollY-based sizing needs a nudge.
+            if (dt) { dt.columns.adjust(); }
+        });
+
+        // "Opp Products(365d)" (column 1) isn't part of DataTables' automatic header-click
+        // sorting (see the columnDefs comment above: orderCellsTop is left false, so only the
+        // bottom header row's leaf pricebook cells get that wired up automatically). Delegated
+        // (not bound directly to the th) because buildMatrix() recreates the header cells on
+        // every search.
+        $(document).on("click", "th.opp-total-header", function () {
+            if (!dt) { return; }
+            var current = dt.order();
+            var isAsc = current.length > 0 && current[0][0] === 1 && current[0][1] === "asc";
+            dt.order([1, isAsc ? "desc" : "asc"]).draw();
+        });
+
+        // Mirrors DataTables' own sorting_asc/sorting_desc header classes (and their built-in
+        // CSS arrow icons, already loaded via jquery.dataTables.min.css) onto this column's th,
+        // since it's outside DataTables' automatic header management and wouldn't otherwise show
+        // which way - or whether - it's currently sorted.
+        $("#matrixTable").on("order.dt", function () {
+            if (!dt) { return; }
+            var order = dt.order();
+            var $th = $(".opp-total-header");
+            $th.removeClass("sorting_asc sorting_desc sorting");
+            $th.addClass(order.length > 0 && order[0][0] === 1 ? (order[0][1] === "asc" ? "sorting_asc" : "sorting_desc") : "sorting");
+        });
 
         // DataTables' scrollX mode clones the header into a separate table (dataTables_scrollHead)
         // kept in sync with the body table's column widths. At non-100% browser zoom the two tables'
