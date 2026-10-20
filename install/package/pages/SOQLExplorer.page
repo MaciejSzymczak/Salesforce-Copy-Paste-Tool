@@ -90,69 +90,69 @@
 
     <script>
 
-		String.prototype.format = function() {
-		  var args = arguments;
-		  return this.replace(/{(\d+)}/g, function(match, number)
-		  {
-			return typeof args[number] != 'undefined' ? args[number] :
-														'{' + number + '}';
-		  });
-		};
+        String.prototype.format = function() {
+          var args = arguments;
+          return this.replace(/{(\d+)}/g, function(match, number)
+          {
+            return typeof args[number] != 'undefined' ? args[number] :
+                                                        '{' + number + '}';
+          });
+        };
 
         itemsToHide = ['type'];
         fineLabels = {"OldValue":"NewValue"};
         fieldSeparator = '';
         
-		function flattenJSON(data) {
-			let result = [];
+        function flattenJSON(data) {
+            let result = [];
 
-			data.forEach(item => {
-				let flatItem = {};
-				flattenHelper(item, flatItem, '');
-				result.push(flatItem);
-			});
+            data.forEach(item => {
+                let flatItem = {};
+                flattenHelper(item, flatItem, '');
+                result.push(flatItem);
+            });
 
-			return result;
-		}
+            return result;
+        }
 
-		function flattenHelper(current, flatItem, prefix) {
-			for (let key in current) {
-				if (current.hasOwnProperty(key)) {
-					let value = current[key];
-					let newKey = prefix ? `${prefix}.${key}` : key;
+        function flattenHelper(current, flatItem, prefix) {
+            for (let key in current) {
+                if (current.hasOwnProperty(key)) {
+                    let value = current[key];
+                    let newKey = prefix ? `${prefix}.${key}` : key;
 
-					if (value && typeof value === 'object' && !Array.isArray(value)) {
-						flattenHelper(value, flatItem, newKey);
-					} else {
-						flatItem[newKey] = value;
-					}
-				}
-			}
-		}
+                    if (value && typeof value === 'object' && !Array.isArray(value)) {
+                        flattenHelper(value, flatItem, newKey);
+                    } else {
+                        flatItem[newKey] = value;
+                    }
+                }
+            }
+        }
 
-		//swap rows and columns: one row per field, one column per record
-		function transposeRecordset(records) {
-			if (!records || records.length == 0) return records;
-			var headers = array_keys(records[0]);
-			var transposed = [];
-			for (var h = 0; h < headers.length; h++) {
-				var row = {};
-				row['Field'] = headers[h];
-				for (var i = 0; i < records.length; i++) {
-					row['Record ' + (i+1)] = records[i][headers[h]];
-				}
-				transposed.push(row);
-			}
-			return transposed;
-		}
+        //swap rows and columns: one row per field, one column per record
+        function transposeRecordset(records) {
+            if (!records || records.length == 0) return records;
+            var headers = array_keys(records[0]);
+            var transposed = [];
+            for (var h = 0; h < headers.length; h++) {
+                var row = {};
+                row['Field'] = headers[h];
+                for (var i = 0; i < records.length; i++) {
+                    row['Record ' + (i+1)] = records[i][headers[h]];
+                }
+                transposed.push(row);
+            }
+            return transposed;
+        }
 
-		/**
-		 * @author Maciej Szymczak, based on Json-to-HTML-Table-master by Afshin Mehrabani
-		 */
-		var rowCount;
+        /**
+         * @author Maciej Szymczak, based on Json-to-HTML-Table-master by Afshin Mehrabani
+         */
+        var rowCount;
         function ConvertJsonToTable(xparsedJson, tableId, tableClassName, linkText, csvMode,recurrence,editable)
         {
-			rowCount = 0;
+            rowCount = 0;
             //Patterns for links and NULL value
             var italic = '<i>{0}</i>';
             var link = linkText ? '<a href="{0}">' + linkText + '</a>' :
@@ -246,7 +246,7 @@
                         tbCon += tdRow.format(parsedJson[i]);
                         if (csvMode) tbCon = tbCon.substring(0, tbCon.length - 1); //truncate last comma
                         trCon += tr.format(tbCon)+(recurrence?'':'\r\n');
-						rowCount++;
+                        rowCount++;
                         tbCon = '';
                     }
                 }
@@ -306,7 +306,7 @@
                             }
                             if (csvMode) tbCon = tbCon.substring(0, tbCon.length - 1); //truncate last comma
                             trCon += tr.format(tbCon)+(recurrence?'':'\r\n');
-							rowCount++;
+                            rowCount++;
                             tbCon = '';
 
                         }
@@ -347,7 +347,7 @@
             return tmp_arr;
         }
 
-	/*
+    /*
     function SOQLToTable (query, itemsToHide, fineLabels ) {
 
         xparsedJson= sforce.connection.query(query);
@@ -360,7 +360,7 @@
         return "*** No records found"
         }
     }
-	*/
+    */
     
     //textArea functions. source: http://help.dottoro.com/ljtfkhio.php
     function GetSelection (textareaId) {
@@ -714,21 +714,21 @@
                 data = ConvertJsonToTable (recordset,'','','',true);
                 filename = 'dummy.txt';
                 type = 'text/plain';
-				
-				if (pfieldSeparator=='JSON') {
-					data = myJsonString;
-				}
-				if (pfieldSeparator=='nodownload') {
-					resetGridEdits();
-					var flatView = document.getElementById('flatView').checked;
-					var transposeView = document.getElementById('transposeView').checked;
-					var dataForTable = flatView ? flattenJSON(recordset) : recordset;
-					if (transposeView) {
-						dataForTable = transposeRecordset(dataForTable);
-					}
-					var editableGrid = !flatView && !transposeView && !toolingApi;
-					data = ConvertJsonToTable ( dataForTable, '', '', '', false, false, editableGrid );
-				}
+                
+                if (pfieldSeparator=='JSON') {
+                    data = myJsonString;
+                }
+                if (pfieldSeparator=='nodownload') {
+                    resetGridEdits();
+                    var flatView = document.getElementById('flatView').checked;
+                    var transposeView = document.getElementById('transposeView').checked;
+                    var dataForTable = flatView ? flattenJSON(recordset) : recordset;
+                    if (transposeView) {
+                        dataForTable = transposeRecordset(dataForTable);
+                    }
+                    var editableGrid = !flatView && !transposeView && !toolingApi;
+                    data = ConvertJsonToTable ( dataForTable, '', '', '', false, false, editableGrid );
+                }
 
                 if (pfieldSeparator!='nodownload') {
                   download(data, filename, type);
@@ -884,7 +884,7 @@ function executeSelect() {
            default: 
                alert('Default case'); break;
         }
-	document.getElementById('select').selectedIndex = 0;	
+    document.getElementById('select').selectedIndex = 0;    
 }
 
 function otherActions() {
@@ -935,6 +935,18 @@ select Id, Name, userName, lastloginDate, createdDate, isActive from User where 
 select Id, Name, (select id, FirstName, LastName from Contacts limit 2) from Account limit 10
 select Id, FirstName, LastName, (select Id from Tasks) from Contact limit 2
 select Id, Name, account.owner.Name from Contact limit 2
+
+--Integrations Quick Review: Create unique list of Application using https://askmac.pl/
+SELECT
+    UserId,
+    LoginType,
+    Application,
+    SourceIp,
+    Status
+FROM LoginHistory
+WHERE LoginTime = last_n_days:3
+ORDER BY LoginTime DESC
+
 
 --New accounts Y2Y
 Select count(Id) Accounts, Calendar_Year(CreatedDate) Yearly from Account where CreatedDate = last_n_days:1500 group by Calendar_Year(CreatedDate) order by Calendar_Year(CreatedDate)
@@ -1102,7 +1114,7 @@ You can also use this tool to visualise the json, for example this one:
 
     var url_string = window.location.href;
     var url = new URL(url_string);
-	var flatView = url.searchParams.get("flatView");
+    var flatView = url.searchParams.get("flatView");
     var q = url.searchParams.get("q");
     var header = url.searchParams.get("header");
     if (flatView != null) {
