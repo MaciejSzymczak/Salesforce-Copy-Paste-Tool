@@ -1,0 +1,227 @@
+<apex:page lightningstylesheets="true">
+
+<apex:slds />
+
+
+<!--
+     Network Traffic: logins of the last 7 days per Application (LoginHistory), as a horizontal bar chart
+
+     @author Maciej Szymczak, All rights reserved
+     @version 2026.10
+-->
+
+<script src="../../soap/ajax/64.0/connection.js"></script>
+
+<style>
+    .nt-chart { cursor: pointer; margin: 5px; }
+    .nt-row { display: flex; align-items: center; padding: 2px 0; border-radius: 3px; }
+    .nt-label.nt-app { flex: 0 0 20%; }
+    .nt-label.nt-users { flex: 0 0 30%; text-align: left; color: #444; }
+    .nt-head { font-weight: bold; border-bottom: 1px solid #d8dde6; margin-bottom: 2px; }
+    .nt-label { flex: 0 0 45%; padding-right: 8px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .nt-track { flex: 1 1 auto; }
+    .nt-bar { background: #0176d3; height: 20px; min-width: 2px; border-radius: 2px; }
+    .nt-count { flex: 0 0 70px; padding-left: 8px; }
+    /* hot track: highlight the row under the mouse */
+    .nt-row:hover { background: #e5f2fd; }
+    .nt-row:hover .nt-bar { background: #014486; }
+    .nt-row:hover .nt-label, .nt-row:hover .nt-count { font-weight: bold; }
+    .nt-row.nt-head:hover { background: none; }
+</style>
+
+    <script>
+        sforce.connection.sessionId = "{!$Api.Session_ID}";
+
+        // number of days: URL parameter ?days=N, default 2
+        var url = new URL(window.location.href);
+        var defaultDays = parseInt(url.searchParams.get("days"), 10) > 0 ? parseInt(url.searchParams.get("days"), 10) : 2;
+        var detailsUrl = '';
+        var chartRows = [];  // last result for the download: {app, users, count}
+        var chartDays = 0;
+
+        function download(data, filename, type) {
+        var a = document.createElement("a"),
+            file = new Blob([data], {type: type});
+        if (window.navigator.msSaveOrOpenBlob) // IE10+
+            window.navigator.msSaveOrOpenBlob(file, filename);
+        else { // Others
+            var url = URL.createObjectURL(file);
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(function() {
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+            }, 0);
+        }
+        }
+
+        // tab separated text, ASCII bar chart (####, longest bar 50 characters) in the last column
+        function downloadText() {
+            if (!chartRows.length) { alert('No data to download.'); return; }
+            var max = chartRows[0].count;
+            var tsv = 'Application\tUsers\tCount\tGraph\r\n';
+            for (var i = 0; i < chartRows.length; i++) {
+                var r = chartRows[i];
+                var clean = function(s) { return String(s).replace(/[\t\r\n]+/g, ' '); };
+                tsv += clean(r.app) + '\t' + clean(r.users) + '\t' + r.count + '\t'
+                    + new Array(Math.max(1, Math.round(50 * r.count / max)) + 1).join('#') + '\r\n';
+            }
+            download(tsv, 'NetworkTraffic_last_' + chartDays + '_days.txt', 'text/plain');
+        }
+
+        function escapeHtml(s) {
+            return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        // the query is synchronous - let the browser paint "Loading..." first
+        function refresh() {
+            document.getElementById('divSummary').innerHTML = 'Loading...';
+            document.getElementById('divChart').innerHTML = '';
+            chartRows = [];
+            setTimeout(showChart, 10);
+        }
+
+        function showChart() {
+            try {
+                var days = parseInt(document.getElementById('days').value, 10);
+                if (!(days > 0)) {
+                    days = defaultDays;
+                    document.getElementById('days').value = days;
+                }
+                detailsUrl = '/apex/SOQLExplorer?header=Traffic+Details&q='
+                    + encodeURIComponent('SELECT\n    UserId,\n    LoginType,\n    Application,\n    SourceIp,\n    Status\nFROM LoginHistory\nWHERE LoginTime = last_n_days:' + days + '\nORDER BY LoginTime DESC')
+                    + '&flatView=false';
+                var mySOQL = `
+                    SELECT
+                        UserId,
+                        LoginType,
+                        Application,
+                        SourceIp,
+                        Status
+                    FROM LoginHistory
+                    WHERE LoginTime = last_n_days:` + days + `
+                    ORDER BY LoginTime DESC
+                    `;
+                  var records=[];
+                  var result = sforce.connection.query(mySOQL);
+                  var queryMore = true;
+                  while (queryMore) {
+                      var recordsChunk = result.getArray("records");
+                      records = records.concat(recordsChunk);
+                      if (result.getBoolean("done")) {
+                          queryMore = false;
+                      } else {
+                          result = sforce.connection.queryMore(result.queryLocator);
+                      }
+                  }
+
+                  // unique Applications with record counts (no GROUP BY on Application in SOQL)
+                  var counts = {};
+                  var appUsers = {}; // Application -> distinct UserIds
+                  for (var i = 0; i < records.length; i++) {
+                      var app = records[i].Application ? records[i].Application : '(blank)';
+                      counts[app] = (counts[app] || 0) + 1;
+                      if (!appUsers[app]) { appUsers[app] = []; }
+                      if (records[i].UserId && appUsers[app].indexOf(records[i].UserId) < 0) { appUsers[app].push(records[i].UserId); }
+                  }
+
+                  // usernames, only for applications with up to 3 users (more is shown as "many")
+                  var userIds = [];
+                  for (var a in appUsers) {
+                      if (appUsers[a].length <= 3) {
+                          for (var k = 0; k < appUsers[a].length; k++) {
+                              if (userIds.indexOf(appUsers[a][k]) < 0) { userIds.push(appUsers[a][k]); }
+                          }
+                      }
+                  }
+                  var userNames = {};
+                  for (var c = 0; c < userIds.length; c += 200) {
+                      var users = sforce.connection.query("select Id, Username, Profile.Name from User where Id in ('" + userIds.slice(c, c + 200).join("','") + "')").getArray("records");
+                      for (var u = 0; u < users.length; u++) {
+                          var name = users[u].Username + (users[u].Profile && users[u].Profile.Name ? ' ' + users[u].Profile.Name : '');
+                          userNames[users[u].Id] = name;
+                          userNames[users[u].Id.substring(0, 15)] = name;
+                      }
+                  }
+                  function appUsersText(app) {
+                      var ids = appUsers[app];
+                      if (ids.length > 3) { return 'many'; }
+                      return ids.map(function(id) { return userNames[id] || userNames[id.substring(0, 15)] || id; }).join(', ');
+                  }
+                  var apps = Object.keys(counts).sort(function(a, b) { return counts[b] - counts[a] || a.localeCompare(b); });
+                  var max = apps.length ? counts[apps[0]] : 0;
+                  chartDays = days;
+                  chartRows = apps.map(function(app) { return { app: app, users: appUsersText(app), count: counts[app] }; });
+
+                  var chart = '<div class="nt-chart" title="Click to see the traffic details" onclick="javascript:window.open(detailsUrl, \'_blank\');">';
+                  chart = chart + '<div class="nt-row nt-head">'
+                      + '<div class="nt-label nt-app">Application</div><div class="nt-label nt-users">Users</div>'
+                      + '<div class="nt-track"></div><div class="nt-count">Count</div></div>';
+                  for (var j = 0; j < apps.length; j++) {
+                      var usersText = appUsersText(apps[j]);
+                      chart = chart + '<div class="nt-row">'
+                          + '<div class="nt-label nt-app" title="' + escapeHtml(apps[j]) + '">' + escapeHtml(apps[j]) + '</div>'
+                          + '<div class="nt-label nt-users" title="' + escapeHtml(usersText) + '">' + escapeHtml(usersText) + '</div>'
+                          + '<div class="nt-track"><div class="nt-bar" style="width:' + (100 * counts[apps[j]] / max) + '%;"></div></div>'
+                          + '<div class="nt-count">' + counts[apps[j]] + '</div>'
+                          + '</div>';
+                  }
+                  chart = chart + '</div>';
+
+                document.getElementById('divSummary').innerHTML = records.length + ' logins in the last ' + days + ' days, ' + apps.length + ' applications. Click the chart to see the details.';
+                document.getElementById('divChart').innerHTML = apps.length ? chart : 'No logins found.';
+                }
+            catch(err)
+            {
+                document.getElementById('divChart').innerHTML = err;
+            }
+        }
+
+</script>
+
+<body>
+
+<div class="slds-notify slds-notify_alert slds-theme_alert-texture slds-theme_info" role="alert">
+  <h2>NETWORK TRAFFIC (Logins per Application)</h2>
+</div>
+<div class="slds-m-top_xx-small">
+
+   <table>
+   <tr>
+   <td>
+        <div class="slds-form-element">
+          <label class="slds-form-element__label" for="days">Last N days</label>
+          <div class="slds-form-element__control">
+            <input type="number" min="1" step="1" id="days" class="slds-input" style="width: 100px;" onkeydown="if (event.key === 'Enter') refresh();"/>
+          </div>
+        </div>
+   </td>
+   <td>&nbsp;
+   </td>
+   <td style="vertical-align: bottom;">
+        <button class="slds-button slds-button_neutral" onclick="javascript:refresh();">Refresh</button>
+   </td>
+   <td>&nbsp;
+   </td>
+   <td style="vertical-align: bottom;">
+        <button class="slds-button slds-button_neutral" onclick="javascript:downloadText();">Download</button>
+   </td>
+   </tr>
+   </table>
+
+</div>
+<div class="slds-text-body_small">&nbsp;</div>
+
+<div id="divSummary" class="slds-text-body_regular" style="margin: 5px;">Loading...</div>
+<div id="divChart" style="margin: 5px;"></div>
+
+<script>
+        document.getElementById('days').value = defaultDays;
+        refresh();
+</script>
+
+</body>
+
+</apex:page>
