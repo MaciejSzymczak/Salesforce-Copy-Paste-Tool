@@ -1,0 +1,207 @@
+<apex:page lightningstylesheets="true">
+
+<apex:slds />
+
+
+<!--
+     Batch Traffic: Apex jobs (AsyncApexJob) of the last N days per Apex class, as a horizontal bar chart
+
+     @author Maciej Szymczak, All rights reserved
+     @version 2026.10
+-->
+
+<script src="../../soap/ajax/64.0/connection.js"></script>
+
+<style>
+    .nt-chart { cursor: pointer; margin: 5px; }
+    .nt-row { display: flex; align-items: center; padding: 2px 0; border-radius: 3px; }
+    .nt-label.nt-app { flex: 0 0 20%; }
+    .nt-label.nt-users { flex: 0 0 30%; text-align: left; color: #444; }
+    .nt-head { font-weight: bold; border-bottom: 1px solid #d8dde6; margin-bottom: 2px; }
+    .nt-label { flex: 0 0 45%; padding-right: 8px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .nt-track { flex: 1 1 auto; }
+    .nt-bar { background: #0176d3; height: 20px; min-width: 2px; border-radius: 2px; }
+    .nt-count { flex: 0 0 70px; padding-left: 8px; }
+    /* hot track: highlight the row under the mouse */
+    .nt-row:hover { background: #e5f2fd; }
+    .nt-row:hover .nt-bar { background: #014486; }
+    .nt-row:hover .nt-label, .nt-row:hover .nt-count { font-weight: bold; }
+    .nt-row.nt-head:hover { background: none; }
+</style>
+
+    <script>
+        sforce.connection.sessionId = "{!$Api.Session_ID}";
+
+        // number of days: URL parameter ?days=N, default 3
+        var url = new URL(window.location.href);
+        var defaultDays = parseInt(url.searchParams.get("days"), 10) > 0 ? parseInt(url.searchParams.get("days"), 10) : 3;
+        var detailsUrl = '';
+        var chartRows = [];  // last result for the download: {task, createdBy, jobs}
+        var chartDays = 0;
+
+        function download(data, filename, type) {
+        var a = document.createElement("a"),
+            file = new Blob([data], {type: type});
+        if (window.navigator.msSaveOrOpenBlob) // IE10+
+            window.navigator.msSaveOrOpenBlob(file, filename);
+        else { // Others
+            var url = URL.createObjectURL(file);
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(function() {
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+            }, 0);
+        }
+        }
+
+        // tab separated text, ASCII bar chart (####, longest bar 50 characters) in the last column
+        function downloadText() {
+            if (!chartRows.length) { alert('No data to download.'); return; }
+            var max = chartRows[0].jobs;
+            var tsv = 'TaskName\tCreatedBy\tJobs\tGraph\r\n';
+            for (var i = 0; i < chartRows.length; i++) {
+                var r = chartRows[i];
+                var clean = function(s) { return String(s).replace(/[\t\r\n]+/g, ' '); };
+                tsv += clean(r.task) + '\t' + clean(r.createdBy) + '\t' + r.jobs + '\t'
+                    + new Array(Math.max(1, max > 0 ? Math.round(50 * r.jobs / max) : 1) + 1).join('#') + '\r\n';
+            }
+            download(tsv, 'BatchTraffic_last_' + chartDays + '_days.txt', 'text/plain');
+        }
+
+        function escapeHtml(s) {
+            return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        // the query is synchronous - let the browser paint "Loading..." first
+        function refresh() {
+            document.getElementById('divSummary').innerHTML = 'Loading...';
+            document.getElementById('divChart').innerHTML = '';
+            chartRows = [];
+            setTimeout(showChart, 10);
+        }
+
+        function showChart() {
+            try {
+                var days = parseInt(document.getElementById('days').value, 10);
+                if (!(days > 0)) {
+                    days = defaultDays;
+                    document.getElementById('days').value = days;
+                }
+                detailsUrl = '/apex/SOQLExplorer?header=Batch+Traffic+Details&q='
+                    + encodeURIComponent('SELECT\n    CreatedDate,\n    ApexClass.Name,\n    JobType,\n    Status,\n    TotalJobItems,\n    JobItemsProcessed,\n    NumberOfErrors,\n    CreatedBy.Name\nFROM AsyncApexJob\nWHERE JobType != \'BatchApexWorker\'\nAND CreatedDate = last_n_days:' + days + '\nORDER BY CreatedDate DESC')
+                    + '&flatView=false';
+                var mySOQL = `
+                    SELECT ApexClass.Name TaskName, sum(TotalJobItems) Jobs, createdBy.Name CreatedBy
+                    FROM AsyncApexJob
+                    WHERE JobType != 'BatchApexWorker'
+                    AND CreatedDate = last_n_days:` + days + `
+                    Group by ApexClass.Name , createdBy.Name
+                    order by sum(TotalJobItems) desc
+                    `;
+                  var records=[];
+                  var result = sforce.connection.query(mySOQL);
+                  var queryMore = true;
+                  while (queryMore) {
+                      var recordsChunk = result.getArray("records");
+                      records = records.concat(recordsChunk);
+                      if (result.getBoolean("done")) {
+                          queryMore = false;
+                      } else {
+                          result = sforce.connection.queryMore(result.queryLocator);
+                      }
+                  }
+
+                  // one row per Apex class (the query groups by class and creator); rows with 0 jobs are left out
+                  var total = 0;
+                  var taskJobs = {};     // TaskName -> sum of Jobs
+                  var taskCreators = {}; // TaskName -> distinct creator names
+                  for (var i = 0; i < records.length; i++) {
+                      var jobs = parseInt(records[i].Jobs, 10) || 0;
+                      if (jobs <= 0) { continue; }
+                      var task = records[i].TaskName ? records[i].TaskName : '(blank)';
+                      var creator = records[i].CreatedBy ? records[i].CreatedBy : '(blank)';
+                      total += jobs;
+                      taskJobs[task] = (taskJobs[task] || 0) + jobs;
+                      if (!taskCreators[task]) { taskCreators[task] = []; }
+                      if (taskCreators[task].indexOf(creator) < 0) { taskCreators[task].push(creator); }
+                  }
+                  // more than 4 creators is shown as "Many"
+                  chartRows = Object.keys(taskJobs).sort(function(a, b) { return taskJobs[b] - taskJobs[a] || a.localeCompare(b); }).map(function(task) {
+                      return { task: task, createdBy: taskCreators[task].length > 4 ? 'Many' : taskCreators[task].join(', '), jobs: taskJobs[task] };
+                  });
+                  var max = chartRows.length ? chartRows[0].jobs : 0;
+                  chartDays = days;
+
+                  var chart = '<div class="nt-chart" title="Click to see the job details" onclick="javascript:window.open(detailsUrl, \'_blank\');">';
+                  chart = chart + '<div class="nt-row nt-head">'
+                      + '<div class="nt-label nt-app">TaskName</div><div class="nt-label nt-users">CreatedBy</div>'
+                      + '<div class="nt-track"></div><div class="nt-count">Jobs</div></div>';
+                  for (var j = 0; j < chartRows.length; j++) {
+                      var r = chartRows[j];
+                      chart = chart + '<div class="nt-row">'
+                          + '<div class="nt-label nt-app" title="' + escapeHtml(r.task) + '">' + escapeHtml(r.task) + '</div>'
+                          + '<div class="nt-label nt-users" title="' + escapeHtml(r.createdBy) + '">' + escapeHtml(r.createdBy) + '</div>'
+                          + '<div class="nt-track"><div class="nt-bar" style="width:' + (max > 0 ? 100 * r.jobs / max : 0) + '%;"></div></div>'
+                          + '<div class="nt-count">' + r.jobs + '</div>'
+                          + '</div>';
+                  }
+                  chart = chart + '</div>';
+
+                document.getElementById('divSummary').innerHTML = total + ' jobs in the last ' + days + ' days, ' + chartRows.length + ' tasks. Click the chart to see the details.';
+                document.getElementById('divChart').innerHTML = chartRows.length ? chart : 'No jobs found.';
+                }
+            catch(err)
+            {
+                document.getElementById('divChart').innerHTML = err;
+            }
+        }
+
+</script>
+
+<body>
+
+<div class="slds-notify slds-notify_alert slds-theme_alert-texture slds-theme_info" role="alert">
+  <h2>BATCH TRAFFIC (Apex Jobs per Class)</h2>
+</div>
+<div class="slds-m-top_xx-small">
+
+   <table>
+   <tr>
+   <td>
+        <div class="slds-form-element">
+          <label class="slds-form-element__label" for="days">Last N days</label>
+          <div class="slds-form-element__control">
+            <input type="number" min="1" step="1" id="days" class="slds-input" style="width: 100px;" onkeydown="if (event.key === 'Enter') refresh();"/>
+          </div>
+        </div>
+   </td>
+   <td>&nbsp;
+   </td>
+   <td style="vertical-align: bottom;">
+        <button class="slds-button slds-button_neutral" onclick="javascript:refresh();">Refresh</button>
+   </td>
+   <td>&nbsp;
+   </td>
+   <td style="vertical-align: bottom;">
+        <button class="slds-button slds-button_neutral" onclick="javascript:downloadText();">Download</button>
+   </td>
+   </tr>
+   </table>
+
+</div>
+<div class="slds-text-body_small">&nbsp;</div>
+
+<div id="divSummary" class="slds-text-body_regular" style="margin: 5px;">Loading...</div>
+<div id="divChart" style="margin: 5px;"></div>
+
+<script>
+        document.getElementById('days').value = defaultDays;
+        refresh();
+</script>
+
+</body>
+
+</apex:page>

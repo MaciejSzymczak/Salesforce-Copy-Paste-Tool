@@ -929,24 +929,11 @@ function moreActions() {
 <textarea class="slds-textarea" Id="SOQLExp" rows="10" cols="80" style="width:100%; font-family:'Courier New'">
 Select the query and hit the button Run. The wildcard * is supported!
 
-select * from RecordType
-select Id, FIELDS(CUSTOM) from Account limit 1
+select * from RecordType order by CreatedDate desc limit 1000
+select Id, FIELDS(CUSTOM) from Account order by CreatedDate desc limit 1
 select Id, Name, userName, lastloginDate, createdDate, isActive from User where  isActive = true and Profile.UserLicense.Name = 'Salesforce' order by LastLoginDate desc, createdDate limit 100
 select Id, Name, (select id, FirstName, LastName from Contacts limit 2) from Account limit 10
-select Id, FirstName, LastName, (select Id from Tasks) from Contact limit 2
-select Id, Name, account.owner.Name from Contact limit 2
-
---Integrations Quick Review: Create unique list of Application using https://askmac.pl/
-SELECT
-    UserId,
-    LoginType,
-    Application,
-    SourceIp,
-    Status
-FROM LoginHistory
-WHERE LoginTime = last_n_days:3
-ORDER BY LoginTime DESC
-
+select Id, FirstName, LastName, (select Id from Tasks), account.owner.Name from Contact limit 2
 
 --New accounts Y2Y
 Select count(Id) Accounts, Calendar_Year(CreatedDate) Yearly from Account where CreatedDate = last_n_days:1500 group by Calendar_Year(CreatedDate) order by Calendar_Year(CreatedDate)
@@ -968,19 +955,10 @@ ORDER BY CreatedDate DESC NULLS FIRST LIMIT 1000
 --Event log (logins, logouts etc within last 24 hours / 30 days)
 select * from EventLogFile limit 5
 
--- Batch consumption
-SELECT ApexClass.Name, sum(TotalJobItems)
-FROM AsyncApexJob 
-WHERE JobType != 'BatchApexWorker' 
-AND CreatedDate = today
-Group by ApexClass.Name 
-order by sum(TotalJobItems)desc
---AND CreatedDate &gt;= 2020-01-29T00:00:00.000Z and CreatedDate &lt; 2020-01-29T23:59:59.000Z 
-
 --Debug approval process
 SELECT Id,TargetObjectid, Status,(select id,actor.name from Workitems),(SELECT Id, StepStatus, Comments,Actor.Name FROM Steps) FROM ProcessInstance where TargetObjectId = '5004J00000DeWAH'
 
-You can also use this tool to visualise the json, for example this one:
+Use this tool to visualise the json, for example this one:
 {"glossary": {"title": "example glossary","GlossDiv": {"title": "S","GlossList": {"GlossEntry": {"ID": "SGML","SortAs": "SGML","GlossTerm": "Standard Generalized Markup Language","Acronym": "SGML","Abbrev": "ISO 8879:1986","GlossDef": {"para": "A meta-markup language, used to create markup languages such as DocBook.","GlossSeeAlso": ["GML", "XML"]},"GlossSee": "markup"}}}}}
 </textarea>
 <br></br>
@@ -1053,6 +1031,7 @@ You can also use this tool to visualise the json, for example this one:
             </div>
             <div style="display:flex; flex-direction:column; row-gap:1pt;">
                 <button class="slds-button slds-button_neutral" onclick="javascript:openInNewTab('/apex/NetworkTraffic');">Network Traffic</button>
+                <button class="slds-button slds-button_neutral" onclick="javascript:openInNewTab('/apex/BatchTraffic');">Batch Traffic</button>
             </div>
             </div>
         </fieldset>
