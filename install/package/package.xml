@@ -3,6 +3,7 @@
     <types>
         <members>BatchTraffic</members>
         <members>CongaNotActiveUsers</members>
+        <members>CongaTraffic</members>
         <members>CPQBundleExplorer</members>
         <members>CPQNotActiveUsers</members>
         <members>CPQProductsAndPricebooks</members>

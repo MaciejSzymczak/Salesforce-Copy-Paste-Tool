@@ -1,0 +1,585 @@
+<apex:page lightningstylesheets="true">
+
+<apex:slds />
+
+
+<!--
+     Conga Traffic: Conga Sign transactions (APXT_CongaSign__Transaction__c) per sender, original document, object, year or status,
+     filtered by year and status, shown as circles (circle area = number of transactions)
+
+     @author Maciej Szymczak, All rights reserved
+     @version 2026.10
+-->
+
+<script src="../../soap/ajax/64.0/connection.js"></script>
+
+<style>
+    .ct-chart { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 24px; margin: 5px; }
+    .ct-pie { width: 380px; max-width: 100%; height: auto; }
+    .ct-pie path { stroke: #fff; stroke-width: 1.5; transition: transform 0.15s; transform-origin: 200px 200px; }
+    .ct-legend { border-collapse: collapse; }
+    .ct-legend td { padding: 2px 6px; white-space: nowrap; }
+    .ct-legend td.ct-name { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+    .ct-legend td.ct-num { text-align: right; }
+    .ct-swatch { display: inline-block; width: 14px; height: 14px; border-radius: 3px; vertical-align: middle; }
+    .ct-click { cursor: pointer; }
+    /* hot track: the slice and its legend row are highlighted together */
+    .ct-legend tr.ct-hot { background: #e5f2fd; font-weight: bold; }
+    .ct-pie path.ct-hot { transform: scale(1.05); }
+    /* Bars */
+    .ct-bars { max-width: 1100px; margin: 0 auto; }
+    .ct-bar-row { display: flex; align-items: center; padding: 2px 0; border-radius: 3px; }
+    .ct-bar-label { flex: 0 0 30%; padding-right: 8px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ct-bar-track { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+    .ct-bar { height: 20px; min-width: 2px; border-radius: 2px; }
+    .ct-bar-num { flex: 0 0 60px; padding-left: 8px; text-align: right; }
+    .ct-bar-row.ct-hot { background: #e5f2fd; font-weight: bold; }
+    /* Bubbles */
+    .ct-bubbles { display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-end; }
+    .ct-bubble { display: flex; flex-direction: column; align-items: center; width: 130px; margin: 6px 4px; padding: 4px; border-radius: 4px; }
+    .ct-circle { display: flex; align-items: center; justify-content: center; border-radius: 50%; color: #fff; font-weight: bold; }
+    .ct-bubble-name { margin-top: 4px; max-width: 100%; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ct-bubble.ct-hot { background: #e5f2fd; font-weight: bold; }
+    .ct-soql { white-space: pre-wrap; font-family: monospace; background: #f3f3f3; border: 1px solid #c9c9c9; border-radius: 4px; padding: 6px; margin: 5px; }
+</style>
+
+    <script>
+        sforce.connection.sessionId = "{!$Api.Session_ID}";
+
+        var MAX_SLICES = 15;     // more groups are put together as one "Others" slice (the download has all of them)
+        var COLORS = ['#0176d3', '#ff9a3c', '#2e844a', '#ea001e', '#9050e9', '#06a59a', '#00396b', '#e3066a',
+                      '#3ba755', '#ffb75d', '#1b96ff', '#b60554', '#7f8de1', '#8c4b02', '#04844b'];
+        var OTHERS_COLOR = '#c9c9c9';
+        var MAX_BUBBLES = 150;   // Bubbles: more groups are left out of the chart (the download has all of them)
+        var chartRows = [];      // last result for the download: {name, count}
+        var lastSOQL = '';       // the SOQL(s) used for the last result, for "Show SOQL"
+        var chartFilter = '';
+
+        function download(data, filename, type) {
+        var a = document.createElement("a"),
+            file = new Blob([data], {type: type});
+        if (window.navigator.msSaveOrOpenBlob) // IE10+
+            window.navigator.msSaveOrOpenBlob(file, filename);
+        else { // Others
+            var url = URL.createObjectURL(file);
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(function() {
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+            }, 0);
+        }
+        }
+
+        // tab separated text
+        function downloadText() {
+            if (!chartRows.length) { alert('No data to download.'); return; }
+            var clean = function(s) { return String(s).replace(/[\t\r\n]+/g, ' '); };
+            var tsv = (groupBy() == 'doc' ? 'Document' : groupBy() == 'object' ? 'Object' : groupBy() == 'year' ? 'Year' : groupBy() == 'status' ? 'Status' : 'Sender') + '\tCount\r\n';
+            for (var i = 0; i < chartRows.length; i++) {
+                tsv += clean(chartRows[i].name) + '\t' + chartRows[i].count + '\r\n';
+            }
+            download(tsv, 'CongaTraffic_' + chartFilter.replace(/[^A-Za-z0-9]+/g, '_') + '.txt', 'text/plain');
+        }
+
+        function closePage() {
+          //this page is typically opened embedded in a Lightning Experience iframe; navigating
+          //window.location (the iframe) to the my.salesforce.com home page gets blocked by that
+          //domain's X-Frame-Options ("refused to connect"), so navigate the top-level tab instead.
+          window.top.location.href = '/home/home.jsp';
+        }
+
+        function toggleSOQL() {
+            var div = document.getElementById('divSOQL');
+            if (div.style.display == 'none') {
+                div.textContent = lastSOQL ? lastSOQL : 'No query run yet.';
+                div.style.display = '';
+            } else {
+                div.style.display = 'none';
+            }
+        }
+
+        function escapeHtml(s) {
+            return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        function escapeSOQL(s) {
+            return String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        }
+
+        function queryAll(soql) {
+            var records = [];
+            var result = sforce.connection.query(soql);
+            while (true) {
+                records = records.concat(result.getArray("records"));
+                if (result.getBoolean("done")) { break; }
+                result = sforce.connection.queryMore(result.queryLocator);
+            }
+            return records;
+        }
+
+        function groupBy() { return document.getElementById('groupBy').value; }
+
+        function showError(err) {
+            // the AJAX toolkit needs the "API Enabled" user permission
+            var errText = (err && err.faultcode ? err.faultcode + ' ' + err.faultstring : String(err));
+            document.getElementById('divSummary').innerHTML = '';
+            if (errText.indexOf('API_CURRENTLY_DISABLED') >= 0 || errText.indexOf('API_DISABLED_FOR_ORG') >= 0) {
+                document.getElementById('divChart').innerHTML = '<div class="slds-notify slds-notify_alert slds-theme_alert-texture slds-theme_error" role="alert">'
+                    + '<h2>API access is missing. Add the permission set "Copy Paste Tool Admin" (API Enabled) to your user to make it work.</h2></div>';
+            } else {
+                document.getElementById('divChart').innerHTML = escapeHtml(errText);
+            }
+        }
+
+        // fills the Year and Status picklists with the values that exist in the data
+        function loadPicklists() {
+            var soql = 'SELECT CALENDAR_YEAR(CreatedDate) yr, APXT_CongaSign__Status__c status\n'
+                + 'FROM APXT_CongaSign__Transaction__c\n'
+                + 'GROUP BY CALENDAR_YEAR(CreatedDate), APXT_CongaSign__Status__c';
+            var records = sforce.connection.query(soql).getArray("records");
+            var years = [String(new Date().getFullYear())];
+            var statuses = ['COMPLETE'];
+            for (var i = 0; i < records.length; i++) {
+                var y = String(records[i].yr);
+                var s = records[i].status;
+                if (years.indexOf(y) < 0) { years.push(y); }
+                if (s && statuses.indexOf(s) < 0) { statuses.push(s); }
+            }
+            years.sort().reverse();
+            statuses.sort();
+            fillSelect('year', years, String(new Date().getFullYear()));
+            fillSelect('status', statuses, 'COMPLETE');
+        }
+
+        function fillSelect(id, values, selected) {
+            var html = '<option value="">(All)</option>';
+            for (var i = 0; i < values.length; i++) {
+                html += '<option value="' + escapeHtml(values[i]) + '"' + (values[i] == selected ? ' selected="selected"' : '') + '>' + escapeHtml(values[i]) + '</option>';
+            }
+            document.getElementById(id).innerHTML = html;
+        }
+
+        // the query is synchronous - let the browser paint "Loading..." first
+        function refresh() {
+            document.getElementById('divSummary').innerHTML = 'Loading...';
+            document.getElementById('divChart').innerHTML = '';
+            document.getElementById('divSOQL').style.display = 'none';
+            chartRows = [];
+            setTimeout(showChart, 10);
+        }
+
+        function whereClause() {
+            var year = document.getElementById('year').value;
+            var status = document.getElementById('status').value;
+            var cond = [];
+            if (year) { cond.push('CALENDAR_YEAR(CreatedDate) = ' + parseInt(year, 10)); }
+            if (status) { cond.push("APXT_CongaSign__Status__c = '" + escapeSOQL(status) + "'"); }
+            chartFilter = (year ? year : 'all years') + ' ' + (status ? status : 'all statuses');
+            return cond.length ? 'WHERE ' + cond.join('\nAND ') + '\n' : '';
+        }
+
+        // transactions per sender name: the aggregate query, summed up per sender (a filter set to "(All)" gives several rows per sender)
+        function countBySender(where) {
+            var soql = 'SELECT CALENDAR_YEAR(CreatedDate) yr, APXT_CongaSign__Status__c, APXT_CongaSign__SenderName__c, COUNT(Id) Counter\n'
+                + 'FROM APXT_CongaSign__Transaction__c\n'
+                + where
+                + 'GROUP BY CALENDAR_YEAR(CreatedDate), APXT_CongaSign__Status__c, APXT_CongaSign__SenderName__c\n'
+                + 'ORDER BY CALENDAR_YEAR(CreatedDate), APXT_CongaSign__SenderName__c desc';
+            lastSOQL = soql;
+            var records = sforce.connection.query(soql).getArray("records");
+            var counts = {};
+            for (var i = 0; i < records.length; i++) {
+                var name = records[i].APXT_CongaSign__SenderName__c ? records[i].APXT_CongaSign__SenderName__c : '(blank)';
+                counts[name] = (counts[name] || 0) + (parseInt(records[i].Counter, 10) || 0);
+            }
+            return counts;
+        }
+
+        // transactions per original document: the ContentVersion title, without the "_yyyyMMddHHmmss" suffix of
+        // generated documents, so all documents generated from the same template are counted together
+        function countByDocument(where) {
+            var soql = 'SELECT APXT_CongaSign__OriginalDocumentId__c\n'
+                + 'FROM APXT_CongaSign__Transaction__c\n'
+                + where;
+            var records = queryAll(soql);
+            var docCounts = {};
+            for (var i = 0; i < records.length; i++) {
+                var id = records[i].APXT_CongaSign__OriginalDocumentId__c ? records[i].APXT_CongaSign__OriginalDocumentId__c : '';
+                docCounts[id] = (docCounts[id] || 0) + 1;
+            }
+            var ids = Object.keys(docCounts).filter(function(id) { return /^[a-zA-Z0-9]{15,18}$/.test(id); });
+            var titles = {};
+            var titleSOQL = 'SELECT Id, Title\nFROM ContentVersion\nWHERE Id IN (...original document ids...)';
+            for (var c = 0; c < ids.length; c += 200) {
+                var versions = sforce.connection.query("SELECT Id, Title FROM ContentVersion WHERE Id IN ('" + ids.slice(c, c + 200).join("','") + "')").getArray("records");
+                for (var v = 0; v < versions.length; v++) {
+                    titles[versions[v].Id] = versions[v].Title;
+                    titles[versions[v].Id.substring(0, 15)] = versions[v].Title;
+                }
+            }
+            lastSOQL = soql + '\n\n' + titleSOQL;
+            var counts = {};
+            for (var docId in docCounts) {
+                var title = titles[docId] || titles[docId.substring(0, 15)];
+                var name = !docId ? '(no document)'
+                    : title ? title.replace(/_\d{14}(\.[^.]+)?$/, '$1')
+                    : docId + ' (file not visible)';
+                counts[name] = (counts[name] || 0) + docCounts[docId];
+            }
+            return counts;
+        }
+
+        // object names by record Id key prefix (e.g. 006 -> Opportunity), from describeGlobal, read once
+        var objectsByPrefix = null;
+        function objectName(prefix) {
+            if (!objectsByPrefix) {
+                objectsByPrefix = {};
+                var sobjects = sforce.connection.describeGlobal().getArray("sobjects");
+                for (var i = 0; i < sobjects.length; i++) {
+                    // the label, plus the API name when it differs (e.g. "Company (Account)", "Quote (SBQQ__Quote__c)")
+                    if (sobjects[i].keyPrefix) {
+                        objectsByPrefix[sobjects[i].keyPrefix] = sobjects[i].label == sobjects[i].name ? sobjects[i].label : sobjects[i].label + ' (' + sobjects[i].name + ')';
+                    }
+                }
+            }
+            return objectsByPrefix[prefix];
+        }
+
+        // transactions per object the transaction was sent from (APXT_CongaSign__ExternalObjectId__c is a record Id):
+        // the object is found by the key prefix of the Id. groupKeys keeps the prefix for the click to the details
+        function countByObject(where) {
+            var soql = 'SELECT APXT_CongaSign__ExternalObjectId__c\n'
+                + 'FROM APXT_CongaSign__Transaction__c\n'
+                + where;
+            lastSOQL = soql + '\n\nObject name: from the key prefix of the Id (describeGlobal)';
+            var records = queryAll(soql);
+            var counts = {};
+            for (var i = 0; i < records.length; i++) {
+                var id = records[i].APXT_CongaSign__ExternalObjectId__c ? records[i].APXT_CongaSign__ExternalObjectId__c : '';
+                var prefix = /^[a-zA-Z0-9]{15,18}$/.test(id) ? id.substring(0, 3) : '';
+                var name = !id ? '(blank)'
+                    : !prefix ? 'Not a record Id'
+                    : objectName(prefix) ? objectName(prefix)
+                    : 'Unknown object (' + prefix + ')';
+                counts[name] = (counts[name] || 0) + 1;
+                if (prefix) { groupKeys[name] = prefix; }
+            }
+            return counts;
+        }
+
+        // transactions per year (CreatedDate)
+        function countByYear(where) {
+            var soql = 'SELECT CALENDAR_YEAR(CreatedDate) yr, COUNT(Id) Counter\n'
+                + 'FROM APXT_CongaSign__Transaction__c\n'
+                + where
+                + 'GROUP BY CALENDAR_YEAR(CreatedDate)\n'
+                + 'ORDER BY CALENDAR_YEAR(CreatedDate)';
+            lastSOQL = soql;
+            var records = sforce.connection.query(soql).getArray("records");
+            var counts = {};
+            for (var i = 0; i < records.length; i++) {
+                var y = String(records[i].yr);
+                counts[y] = parseInt(records[i].Counter, 10) || 0;
+                groupKeys[y] = y;
+            }
+            return counts;
+        }
+
+        // transactions per status
+        function countByStatus(where) {
+            var soql = 'SELECT APXT_CongaSign__Status__c status, COUNT(Id) Counter\n'
+                + 'FROM APXT_CongaSign__Transaction__c\n'
+                + where
+                + 'GROUP BY APXT_CongaSign__Status__c';
+            lastSOQL = soql;
+            var records = sforce.connection.query(soql).getArray("records");
+            var counts = {};
+            for (var i = 0; i < records.length; i++) {
+                var s = records[i].status ? records[i].status : '(blank)';
+                counts[s] = parseInt(records[i].Counter, 10) || 0;
+                groupKeys[s] = s;
+            }
+            return counts;
+        }
+
+        // Show per Year (or Status) with one year (status) selected gives just one slice: switch that filter to (All)
+        function groupByChanged() {
+            if (groupBy() == 'year') { document.getElementById('year').value = ''; }
+            if (groupBy() == 'status') { document.getElementById('status').value = ''; }
+            refresh();
+        }
+
+        var groupKeys = {}; // group name -> key used by the click (sender name, object key prefix, year)
+
+        function showChart() {
+            try {
+                var where = whereClause();
+                var by = groupBy();
+                groupKeys = {};
+                var counts = by == 'doc' ? countByDocument(where)
+                    : by == 'object' ? countByObject(where)
+                    : by == 'year' ? countByYear(where)
+                    : by == 'status' ? countByStatus(where)
+                    : countBySender(where);
+
+                // biggest first; years in time order
+                var names = Object.keys(counts).sort(function(a, b) { return by == 'year' ? a.localeCompare(b) : counts[b] - counts[a] || a.localeCompare(b); });
+                chartRows = names.map(function(n) { return { name: n, count: counts[n] }; });
+                render();
+            }
+            catch(err)
+            {
+                showError(err);
+            }
+        }
+
+        // draws the last query result (chartRows) as the selected chart type; changing the type does not query again
+        function render() {
+            var type = document.getElementById('chartType').value;
+            var by = groupBy();
+            var total = 0;
+            for (var t = 0; t < chartRows.length; t++) { total += chartRows[t].count; }
+
+            // the biggest groups get their own color; with Pie / Donut the rest is put together as one "Others" slice
+            var items = [];
+            var others = 0;
+            for (var j = 0; j < chartRows.length; j++) {
+                var own = j < MAX_SLICES;
+                if (own || type == 'bars' || type == 'bubbles') {
+                    var n = chartRows[j].name;
+                    var key = by == 'sender' ? n : by == 'doc' ? null : groupKeys[n];
+                    items.push({ name: n, count: chartRows[j].count, color: own ? COLORS[j % COLORS.length] : OTHERS_COLOR, click: key != null, key: key });
+                } else {
+                    others += chartRows[j].count;
+                }
+            }
+            if (others > 0) {
+                items.push({ name: 'Others (' + (chartRows.length - MAX_SLICES) + ')', count: others, color: OTHERS_COLOR, click: false });
+            }
+            if (type == 'bubbles' && items.length > MAX_BUBBLES) {
+                items = items.slice(0, MAX_BUBBLES);
+            }
+
+            document.getElementById('divSummary').innerHTML = total + ' transactions (' + escapeHtml(chartFilter) + '), '
+                + chartRows.length + (by == 'doc' ? ' documents' : by == 'object' ? ' objects' : by == 'year' ? ' years' : by == 'status' ? ' statuses' : ' senders') + '.'
+                + (others > 0 ? ' The smallest ones are shown as Others; Download has all of them.' : '')
+                + (type == 'bubbles' && chartRows.length > MAX_BUBBLES ? ' The chart shows the top ' + MAX_BUBBLES + '; Download has all of them.' : '')
+                + (by == 'doc' || !chartRows.length ? '' : ' Click the chart to see the transactions.');
+            if (!chartRows.length) {
+                document.getElementById('divChart').innerHTML = 'No transactions found.';
+                return;
+            }
+            document.getElementById('divChart').innerHTML =
+                  type == 'bars' ? barChart(items, total)
+                : type == 'bubbles' ? bubbleChart(items)
+                : pieChart(items, total, type == 'donut');
+        }
+
+        // class and events of a chart element: hot track with its legend row, click to the transactions of the group
+        function itemEvents(s, i, cls) {
+            cls = (cls ? cls : '') + (s.click ? ' ct-click' : '');
+            return (cls.trim() ? ' class="' + cls.trim() + '"' : '')
+                + ' onmouseover="hot(' + i + ', true);" onmouseout="hot(' + i + ', false);"'
+                + (s.click ? ' data-key="' + escapeHtml(s.key) + '" onclick="javascript:showDetails(this.getAttribute(\'data-key\'));"' : '');
+        }
+
+        // the biggest count (items are not always sorted by count, e.g. years are in time order)
+        function maxCount(items) {
+            var max = 0;
+            for (var i = 0; i < items.length; i++) { if (items[i].count > max) { max = items[i].count; } }
+            return max > 0 ? max : 1;
+        }
+
+        // horizontal bars, all groups, like Network Traffic
+        function barChart(items, total) {
+            var max = maxCount(items);
+            var html = '<div class="ct-bars">';
+            for (var i = 0; i < items.length; i++) {
+                var s = items[i];
+                html += '<div id="ct-l' + i + '"' + itemEvents(s, i, 'ct-bar-row') +' title="' + escapeHtml(s.name + ': ' + s.count) + '">'
+                    + '<div class="ct-bar-label">' + escapeHtml(s.name) + '</div>'
+                    + '<div class="ct-bar-track"><div class="ct-bar" style="width:' + (100 * s.count / max) + '%; background:' + s.color + ';"></div></div>'
+                    + '<div class="ct-bar-num">' + s.count + '</div>'
+                    + '<div class="ct-bar-num">' + (100 * s.count / total).toFixed(1) + '%</div>'
+                    + '</div>';
+            }
+            return html + '</div>';
+        }
+
+        // one circle per group, circle area proportional to the count (diameter 34px .. 120px)
+        function bubbleChart(items) {
+            var max = maxCount(items);
+            var html = '<div class="ct-bubbles">';
+            for (var i = 0; i < items.length; i++) {
+                var s = items[i];
+                var d = Math.round(34 + 86 * Math.sqrt(s.count / max));
+                html += '<div id="ct-l' + i + '"' + itemEvents(s, i, 'ct-bubble') +' title="' + escapeHtml(s.name + ': ' + s.count) + '">'
+                    + '<div class="ct-circle" style="width:' + d + 'px; height:' + d + 'px; background:' + s.color + ';">' + s.count + '</div>'
+                    + '<div class="ct-bubble-name">' + escapeHtml(s.name) + '</div>'
+                    + '</div>';
+            }
+            return html + '</div>';
+        }
+
+        // one SVG pie (slice i = slices[i]) and a legend table next to it; the percentage is written on slices of 4% or more.
+        // donut: the same pie with a hole in the middle that shows the total
+        function pieChart(slices, total, donut) {
+            var cx = 200, cy = 200, r = 180;
+            var labelR = donut ? 0.78 : 0.68;
+            var svg = '<svg class="ct-pie" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg">';
+            var labels = '';
+            var legend = '<table class="ct-legend">';
+            var angle = -Math.PI / 2; // start at 12 o'clock
+            for (var i = 0; i < slices.length; i++) {
+                var s = slices[i];
+                var part = s.count / total;
+                var pct = (100 * part).toFixed(1);
+                var next = angle + 2 * Math.PI * part;
+                var events = itemEvents(s, i);
+                var tip = '<title>' + escapeHtml(s.name + ': ' + s.count + ' (' + pct + '%)') + '</title>';
+                if (slices.length == 1) {
+                    svg += '<circle id="ct-s' + i + '" cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="' + s.color + '"' + events + '>' + tip + '</circle>';
+                } else {
+                    var x1 = cx + r * Math.cos(angle), y1 = cy + r * Math.sin(angle);
+                    var x2 = cx + r * Math.cos(next), y2 = cy + r * Math.sin(next);
+                    svg += '<path id="ct-s' + i + '" fill="' + s.color + '"' + events + ' d="M' + cx + ',' + cy + ' L' + x1.toFixed(2) + ',' + y1.toFixed(2)
+                        + ' A' + r + ',' + r + ' 0 ' + (part > 0.5 ? 1 : 0) + ',1 ' + x2.toFixed(2) + ',' + y2.toFixed(2) + ' Z">' + tip + '</path>';
+                }
+                if (part >= 0.04) {
+                    var mid = (angle + next) / 2;
+                    labels += '<text x="' + (cx + r * labelR * Math.cos(mid)).toFixed(1) + '" y="' + (cy + r * labelR * Math.sin(mid)).toFixed(1)
+                        + '" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="15" font-weight="bold" pointer-events="none">' + pct + '%</text>';
+                }
+                legend += '<tr id="ct-l' + i + '"' + events + '>'
+                    + '<td><span class="ct-swatch" style="background:' + s.color + ';"></span></td>'
+                    + '<td class="ct-name" title="' + escapeHtml(s.name) + '">' + escapeHtml(s.name) + '</td>'
+                    + '<td class="ct-num">' + s.count + '</td>'
+                    + '<td class="ct-num">' + pct + '%</td>'
+                    + '</tr>';
+                angle = next;
+            }
+            if (donut) {
+                svg += '<circle cx="' + cx + '" cy="' + cy + '" r="' + (r * 0.55) + '" fill="#fff" pointer-events="none"></circle>'
+                    + '<text x="' + cx + '" y="' + (cy - 12) + '" text-anchor="middle" dominant-baseline="middle" font-size="40" font-weight="bold" fill="#181818" pointer-events="none">' + total + '</text>'
+                    + '<text x="' + cx + '" y="' + (cy + 24) + '" text-anchor="middle" dominant-baseline="middle" font-size="16" fill="#706e6b" pointer-events="none">transactions</text>';
+            }
+            svg += labels + '</svg>';
+            legend += '</table>';
+            return '<div class="ct-chart">' + svg + legend + '</div>';
+        }
+
+        // highlights a slice together with its legend row
+        function hot(i, on) {
+            var ids = ['ct-s' + i, 'ct-l' + i];
+            for (var k = 0; k < ids.length; k++) {
+                var el = document.getElementById(ids[k]);
+                if (el) { el.classList.toggle('ct-hot', on); }
+            }
+        }
+
+        // the transactions of one group (with the current filters) in SOQL Explorer; key = sender name or object key prefix
+        function showDetails(key) {
+            var where = whereClause();
+            var cond = groupBy() == 'object' ? "APXT_CongaSign__ExternalObjectId__c LIKE '" + escapeSOQL(key) + "%'"
+                : groupBy() == 'year' ? 'CALENDAR_YEAR(CreatedDate) = ' + parseInt(key, 10)
+                : groupBy() == 'status' ? (key == '(blank)' ? 'APXT_CongaSign__Status__c = null' : "APXT_CongaSign__Status__c = '" + escapeSOQL(key) + "'")
+                : key == '(blank)' ? 'APXT_CongaSign__SenderName__c = null'
+                : "APXT_CongaSign__SenderName__c = '" + escapeSOQL(key) + "'";
+            var soql = 'SELECT\n    CreatedDate,\n    Name,\n    APXT_CongaSign__Status__c,\n    APXT_CongaSign__SenderName__c,\n    Owner.Name,\n    APXT_CongaSign__ExternalObjectId__c,\n    APXT_CongaSign__OriginalDocumentId__c\n'
+                + 'FROM APXT_CongaSign__Transaction__c\n'
+                + (where ? where + 'AND ' : 'WHERE ') + cond + '\n'
+                + 'ORDER BY CreatedDate DESC';
+            window.open('/apex/SOQLExplorer?header=Conga+Traffic+Details&q=' + encodeURIComponent(soql) + '&flatView=false', '_blank');
+        }
+
+</script>
+
+<body>
+
+<div class="slds-notify slds-notify_alert slds-theme_alert-texture slds-theme_info" role="alert" style="position:relative;">
+  <h2>CONGA TRAFFIC (Conga Sign transactions)</h2>
+  <span style="position:absolute; right:8px; top:50%; transform:translateY(-50%);">
+      <button class="slds-button slds-button_neutral" onclick="javascript:closePage();">Close</button>
+  </span>
+</div>
+<div class="slds-m-top_xx-small">
+
+   <table style="width: auto; margin: 0 auto;">
+   <tr>
+   <td>
+        <div class="slds-form-element">
+          <label class="slds-form-element__label" for="year">Year</label>
+          <div class="slds-form-element__control">
+            <select id="year" class="slds-select" style="width: 110px;" onchange="refresh();"></select>
+          </div>
+        </div>
+   </td>
+   <td style="padding-left: 4px;">
+        <div class="slds-form-element">
+          <label class="slds-form-element__label" for="status">Status</label>
+          <div class="slds-form-element__control">
+            <select id="status" class="slds-select" style="width: 140px;" onchange="refresh();"></select>
+          </div>
+        </div>
+   </td>
+   <td style="padding-left: 4px;">
+        <div class="slds-form-element">
+          <label class="slds-form-element__label" for="groupBy">Show per</label>
+          <div class="slds-form-element__control">
+            <select id="groupBy" class="slds-select" style="width: 170px;" onchange="groupByChanged();">
+              <option value="sender" selected="selected">Sender</option>
+              <option value="doc">Original document</option>
+              <option value="object">Object</option>
+              <option value="year">Year</option>
+              <option value="status">Status</option>
+            </select>
+          </div>
+        </div>
+   </td>
+   <td style="padding-left: 4px;">
+        <div class="slds-form-element">
+          <label class="slds-form-element__label" for="chartType">Chart</label>
+          <div class="slds-form-element__control">
+            <select id="chartType" class="slds-select" style="width: 120px;" onchange="render();">
+              <option value="pie" selected="selected">Circle (pie)</option>
+              <option value="donut">Donut</option>
+              <option value="bars">Bars</option>
+              <option value="bubbles">Bubbles</option>
+            </select>
+          </div>
+        </div>
+   </td>
+   <td style="vertical-align: bottom; padding-left: 4px;">
+        <button class="slds-button slds-button_neutral" onclick="javascript:refresh();">Refresh</button>
+   </td>
+   <td style="vertical-align: bottom; padding-left: 4px;">
+        <button class="slds-button slds-button_neutral" onclick="javascript:downloadText();">Download</button>
+   </td>
+   <td style="vertical-align: bottom; padding-left: 4px;">
+        <button class="slds-button slds-button_neutral" onclick="javascript:toggleSOQL();">Show SOQL</button>
+   </td>
+   </tr>
+   </table>
+
+</div>
+<div class="slds-text-body_small">&nbsp;</div>
+
+<div id="divSOQL" class="ct-soql" style="display: none;"></div>
+<div id="divSummary" class="slds-text-body_regular" style="margin: 5px; text-align: center;">Loading...</div>
+<div id="divChart" style="margin: 5px;"></div>
+
+<script>
+        try {
+            loadPicklists();
+            refresh();
+        } catch(err) {
+            showError(err);
+        }
+</script>
+
+</body>
+
+</apex:page>

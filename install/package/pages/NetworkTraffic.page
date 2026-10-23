@@ -137,18 +137,30 @@
                       }
                   }
                   var userNames = {};
+                  var userHtml = {}; // highlighted: System Administrator profile in bold red, Salesforce Integration license user in bold green
                   for (var c = 0; c < userIds.length; c += 200) {
-                      var users = sforce.connection.query("select Id, Username, Profile.Name from User where Id in ('" + userIds.slice(c, c + 200).join("','") + "')").getArray("records");
+                      var users = sforce.connection.query("select Id, Username, Profile.Name, Profile.UserLicense.Name from User where Id in ('" + userIds.slice(c, c + 200).join("','") + "')").getArray("records");
                       for (var u = 0; u < users.length; u++) {
-                          var name = users[u].Username + (users[u].Profile && users[u].Profile.Name ? ' ' + users[u].Profile.Name : '');
+                          var profile = users[u].Profile && users[u].Profile.Name ? users[u].Profile.Name : '';
+                          var license = users[u].Profile && users[u].Profile.UserLicense ? users[u].Profile.UserLicense.Name : '';
+                          var name = users[u].Username + (profile ? ' ' + profile : '');
+                          var html = (license == 'Salesforce Integration' ? '<b style="color: #2e844a;">' + escapeHtml(users[u].Username) + '</b>' : escapeHtml(users[u].Username))
+                              + (profile ? ' ' + (profile == 'System Administrator' ? '<b style="color: #ea001e;">' + escapeHtml(profile) + '</b>' : escapeHtml(profile)) : '');
                           userNames[users[u].Id] = name;
                           userNames[users[u].Id.substring(0, 15)] = name;
+                          userHtml[users[u].Id] = html;
+                          userHtml[users[u].Id.substring(0, 15)] = html;
                       }
                   }
                   function appUsersText(app) {
                       var ids = appUsers[app];
                       if (ids.length > 3) { return 'many'; }
                       return ids.map(function(id) { return userNames[id] || userNames[id.substring(0, 15)] || id; }).join(', ');
+                  }
+                  function appUsersHtml(app) {
+                      var ids = appUsers[app];
+                      if (ids.length > 3) { return 'many'; }
+                      return ids.map(function(id) { return userHtml[id] || userHtml[id.substring(0, 15)] || escapeHtml(id); }).join(', ');
                   }
                   var apps = Object.keys(counts).sort(function(a, b) { return counts[b] - counts[a] || a.localeCompare(b); });
                   var max = apps.length ? counts[apps[0]] : 0;
@@ -163,7 +175,7 @@
                       var usersText = appUsersText(apps[j]);
                       chart = chart + '<div class="nt-row">'
                           + '<div class="nt-label nt-app" title="' + escapeHtml(apps[j]) + '">' + escapeHtml(apps[j]) + '</div>'
-                          + '<div class="nt-label nt-users" title="' + escapeHtml(usersText) + '">' + escapeHtml(usersText) + '</div>'
+                          + '<div class="nt-label nt-users" title="' + escapeHtml(usersText) + '">' + appUsersHtml(apps[j]) + '</div>'
                           + '<div class="nt-track"><div class="nt-bar" style="width:' + (100 * counts[apps[j]] / max) + '%;"></div></div>'
                           + '<div class="nt-count">' + counts[apps[j]] + '</div>'
                           + '</div>';
@@ -175,7 +187,15 @@
                 }
             catch(err)
             {
-                document.getElementById('divChart').innerHTML = err;
+                // the AJAX toolkit needs the "API Enabled" user permission
+                var errText = (err && err.faultcode ? err.faultcode + ' ' + err.faultstring : String(err));
+                if (errText.indexOf('API_CURRENTLY_DISABLED') >= 0 || errText.indexOf('API_DISABLED_FOR_ORG') >= 0) {
+                    document.getElementById('divSummary').innerHTML = '';
+                    document.getElementById('divChart').innerHTML = '<div class="slds-notify slds-notify_alert slds-theme_alert-texture slds-theme_error" role="alert">'
+                        + '<h2>API access is missing. Add the permission set "Copy Paste Tool Admin" (API Enabled) to your user to make it work.</h2></div>';
+                } else {
+                    document.getElementById('divChart').innerHTML = escapeHtml(errText);
+                }
             }
         }
 
@@ -186,9 +206,16 @@
 <div class="slds-notify slds-notify_alert slds-theme_alert-texture slds-theme_info" role="alert">
   <h2>NETWORK TRAFFIC (Logins per Application)</h2>
 </div>
+<div class="slds-text-body_regular" style="margin: 5px; text-align: center;">
+    <fieldset style="display: inline-block; border: 1px solid #c9c9c9; border-radius: 4px; padding: 2px 10px 6px 10px;">
+        <legend style="font-weight: bold; padding: 0 4px; margin: 0 auto; width: auto; float: none;">Legend</legend>
+        <b style="color: #2e844a;">green</b> = best practices (Salesforce Integration license),
+        <b style="color: #ea001e;">red</b> = action is required (System Administrator profile)
+    </fieldset>
+</div>
 <div class="slds-m-top_xx-small">
 
-   <table>
+   <table style="width: auto; margin: 0 auto;">
    <tr>
    <td>
         <div class="slds-form-element">
@@ -198,14 +225,10 @@
           </div>
         </div>
    </td>
-   <td>&nbsp;
-   </td>
-   <td style="vertical-align: bottom;">
+   <td style="vertical-align: bottom; padding-left: 4px;">
         <button class="slds-button slds-button_neutral" onclick="javascript:refresh();">Refresh</button>
    </td>
-   <td>&nbsp;
-   </td>
-   <td style="vertical-align: bottom;">
+   <td style="vertical-align: bottom; padding-left: 4px;">
         <button class="slds-button slds-button_neutral" onclick="javascript:downloadText();">Download</button>
    </td>
    </tr>

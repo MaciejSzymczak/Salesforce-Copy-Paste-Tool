@@ -155,7 +155,15 @@
                 }
             catch(err)
             {
-                document.getElementById('divChart').innerHTML = err;
+                // the AJAX toolkit needs the "API Enabled" user permission
+                var errText = (err && err.faultcode ? err.faultcode + ' ' + err.faultstring : String(err));
+                if (errText.indexOf('API_CURRENTLY_DISABLED') >= 0 || errText.indexOf('API_DISABLED_FOR_ORG') >= 0) {
+                    document.getElementById('divSummary').innerHTML = '';
+                    document.getElementById('divChart').innerHTML = '<div class="slds-notify slds-notify_alert slds-theme_alert-texture slds-theme_error" role="alert">'
+                        + '<h2>API access is missing. Add the permission set "Copy Paste Tool Admin" (API Enabled) to your user to make it work.</h2></div>';
+                } else {
+                    document.getElementById('divChart').innerHTML = escapeHtml(errText);
+                }
             }
         }
 

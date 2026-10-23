@@ -1032,6 +1032,7 @@ Use this tool to visualise the json, for example this one:
             <div style="display:flex; flex-direction:column; row-gap:1pt;">
                 <button class="slds-button slds-button_neutral" onclick="javascript:openInNewTab('/apex/NetworkTraffic');">Network Traffic</button>
                 <button class="slds-button slds-button_neutral" onclick="javascript:openInNewTab('/apex/BatchTraffic');">Batch Traffic</button>
+                <button class="slds-button slds-button_neutral" onclick="javascript:openInNewTab('/apex/CongaTraffic');">Conga Traffic</button>
             </div>
             </div>
         </fieldset>
