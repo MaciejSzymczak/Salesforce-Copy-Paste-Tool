@@ -113,6 +113,10 @@
             display:flex;
             align-items:center;
         }
+        /* row drag and drop / text-select only exist in the interactive (DataTables) view */
+        body:not(.interactive-view) .mode-toggle{
+            display:none;
+        }
         .right-buttons{
             display:flex;
             flex-direction:column;
@@ -140,7 +144,13 @@
             font-size:12px;
             color:#fff;
         }
-        #filterInput, #pricebookFilterInput{
+        #productFilterInput{
+            width:520px; /* room for a whole SOQL condition */
+        }
+        #orderBySelect option{
+            color:#080707; /* the dropdown list itself has a white background */
+        }
+        #filterInput, #pricebookFilterInput, #orderBySelect, #productFilterInput{
             border:1px solid rgba(255,255,255,0.5);
             border-radius:16px;
             padding:6px 12px;
@@ -149,14 +159,28 @@
             color:#fff;
             min-width:160px;
         }
-        #filterInput::placeholder, #pricebookFilterInput::placeholder{
+        #filterInput::placeholder, #pricebookFilterInput::placeholder, #productFilterInput::placeholder{
             color:rgba(255,255,255,0.7);
         }
-        #filterInput:focus, #pricebookFilterInput:focus{
+        #filterInput:focus, #pricebookFilterInput:focus, #productFilterInput:focus{
             outline:none;
             background:rgba(255,255,255,0.22);
         }
-        #modeBtn, #searchBtn, #exportBtn{
+        /* "Show SOQL" panel (same idea as the CongaTraffic page) */
+        .cpq-soql{
+            flex:0 0 auto;
+            max-height:40vh;
+            overflow:auto;
+            white-space:pre-wrap;
+            font-family:"SFMono-Regular", Consolas, monospace;
+            font-size:12px;
+            background:#f3f3f3;
+            border:1px solid #c9c9c9;
+            border-radius:4px;
+            padding:6px;
+            margin:0 0 14px 0;
+        }
+        #modeBtn, #searchBtn, #exportBtn, #soqlBtn, #productFilterClearBtn{
             background:rgba(255,255,255,0.15);
             color:#fff;
             border:1px solid rgba(255,255,255,0.5);
@@ -165,7 +189,7 @@
             font-size:12px;
             cursor:pointer;
         }
-        #modeBtn:hover, #searchBtn:hover, #exportBtn:hover{
+        #modeBtn:hover, #searchBtn:hover, #exportBtn:hover, #soqlBtn:hover, #productFilterClearBtn:hover{
             background:rgba(255,255,255,0.28);
         }
         .show-toggles{
@@ -198,7 +222,7 @@
             -webkit-user-select:none !important;
             user-select:none !important;
         }
-        /* Header cells (pricebook names, currency groups, etc.) are sortable via a click
+        /* Header cells (pricebook groups, currencies, etc.) are sortable via a click
            handler, not mousedown-drag like row reordering, so there's no functional reason
            to block text selection there in drag mode either - but keep it symmetric with
            the row-header cell above so "select mode" consistently means "everything copyable". */
@@ -225,6 +249,57 @@
             margin-bottom:14px;
         }
         #statusMsg.error{ color:var(--inactive-red); font-weight:600; }
+        /* Progress of the PricebookEntry fetch (count first, then batch by batch) */
+        #progressBox{
+            flex:0 0 auto;
+            display:none;
+            align-items:center;
+            gap:10px;
+            margin:0 0 14px 0;
+        }
+        #progressBox.visible{ display:flex; }
+        .progress-track{
+            flex:0 1 420px;
+            height:10px;
+            background:#e5e5e5;
+            border-radius:5px;
+            overflow:hidden;
+        }
+        #progressBar{
+            height:100%;
+            width:0;
+            background:var(--sf-blue);
+            transition:width .2s ease;
+        }
+        #progressText{
+            font-size:12px;
+            font-weight:600;
+            color:var(--sf-blue-dark);
+            white-space:nowrap;
+        }
+
+        /* Static view (Interactive view unchecked): plain table, no styling beyond borders */
+        #staticView{
+            display:none;
+            flex:1 1 auto;
+            min-height:0;
+            overflow:auto;
+            background:#fff;
+        }
+        #staticView table{
+            border-collapse:collapse;
+            font-size:12px;
+        }
+        #staticView th, #staticView td{
+            border:1px solid #c9c9c9;
+            padding:2px 6px;
+            white-space:nowrap;
+            text-align:left;
+            font-weight:normal;
+        }
+        #staticView thead th{
+            font-weight:bold;
+        }
 
         /* Let the DataTables wrapper (and its internal scroll body) grow to fill remaining height */
         #matrixTable_wrapper{
@@ -263,13 +338,25 @@
         table.dataTable thead th.row-header-col{
             background:var(--sf-blue-dark);
         }
-        table.dataTable thead th.currency-group{
+        table.dataTable thead th.pricebook-group{
             background:linear-gradient(135deg, var(--sf-blue-dark) 0%, #002855 100%);
             text-align:center;
             font-size:12px;
-            letter-spacing:1px;
-            text-transform:uppercase;
             border-left:1px solid rgba(255,255,255,0.25);
+        }
+        /* Third header row: OpportunityLineItem usage of each pricebook column, summed over the
+           PricebookEntries shown in that column; filled in once loadOppCounts() resolves. */
+        table.dataTable thead th.usage-cell,
+        div.dataTables_scrollHead table thead th.usage-cell{
+            background:#e8f1fb;
+            color:var(--sf-blue-dark);
+            font-size:11px;
+            font-weight:600;
+            padding:4px 8px !important;
+            text-align:center;
+        }
+        th.usage-cell .usage-line{
+            display:block;
         }
         table.dataTable tbody td{
             padding:9px 12px;
@@ -375,7 +462,7 @@
            header th and body td themselves - not DataTables' own column().visible() API, which
            removes hidden columns' cells from the DOM entirely and would silently discard this
            column's asynchronously-filled content (set once loadOppCounts() resolves) if the column
-           happened to be hidden at that moment. Same "Show Opp Products (last year)" checkbox and
+           happened to be hidden at that moment. Same "Show Opp Products (last 2 years)" checkbox and
            show-opp-count body class as opp-count-oli above - one checkbox controls both. */
         .opp-total-header,
         table.dataTable tbody td.opp-count-total{
@@ -387,7 +474,7 @@
         }
         /* Sortable via a manual click handler (see script) rather than DataTables' automatic
            header-click binding, which - since orderCellsTop is left at its default (false) - only
-           wires up the bottom header row's leaf cells, not this rowSpan=2 top-row cell. */
+           wires up the bottom header row's leaf cells, not this rowSpan=3 top-row cell. */
         .opp-total-header{
             cursor:pointer;
         }
@@ -440,22 +527,43 @@
             <button id="foldToggleBtn" type="button">▲ Fold</button>
         </div>
         <div id="headerCollapsible">
-        <p id="subtitle">Matrix view of PricebookEntry records where Product Code LIKE '%TRJN%'</p>
+        <p id="subtitle">Matrix view of PricebookEntry records where Product IsActive = true AND Product Code LIKE '%TRJN%'</p>
         <div class="controls-row">
             <div class="filter-bar">
                 <div class="filter-fields">
+                    <div class="filter-field">
+                        <label for="productIsActiveInput">IsActive</label>
+                        <input type="checkbox" id="productIsActiveInput" checked="checked" />
+                    </div>
                     <div class="filter-field">
                         <label for="filterInput">Product code</label>
                         <input type="text" id="filterInput" value="%TRJN%" spellcheck="false" autocomplete="off" />
                     </div>
                     <div class="filter-field">
+                        <label for="productFilterInput">Product: filters</label>
+                        <input type="text" id="productFilterInput" value="(SBQQ__SubscriptionPricing__c=null or    SBQQ__SubscriptionTerm__c=null  ) and (not (SBQQ__SubscriptionType__c like '%One%'))" placeholder="(optional, SOQL condition on Product2, added as AND (...))" spellcheck="false" autocomplete="off" />
+                        <button id="productFilterClearBtn" type="button">Clear</button>
+                    </div>
+                    <div class="filter-field">
                         <label for="pricebookFilterInput">Pricebook name</label>
                         <input type="text" id="pricebookFilterInput" value="" placeholder="(optional, SOQL LIKE)" spellcheck="false" autocomplete="off" />
+                    </div>
+                    <div class="filter-field">
+                        <label for="orderBySelect">Order by</label>
+                        <select id="orderBySelect">
+                            <option value="created">Product Created Date desc</option>
+                            <option value="code" selected="selected">ProductCode</option>
+                            <option value="name">ProductName</option>
+                        </select>
                     </div>
                 </div>
                 <button id="searchBtn" type="button">Search</button>
             </div>
             <div class="show-toggles">
+                <label class="toggle-check" title="Sortable, draggable, coloured table - slow with 1000+ products. Unchecked: plain table, like the Excel export.">
+                    <input type="checkbox" id="interactiveToggle" />
+                    Interactive view
+                </label>
                 <label class="toggle-check">
                     <input type="checkbox" id="unitPriceToggle" />
                     Show Unit Price
@@ -465,28 +573,33 @@
                     Show PriceBookEntryId
                 </label>
                 <label class="toggle-check">
-                    <input type="checkbox" id="productNameToggle" />
+                    <input type="checkbox" id="productNameToggle" checked="checked" />
                     Show Product Name
                 </label>
                 <label class="toggle-check">
-                    <input type="checkbox" id="productIdToggle" />
+                    <input type="checkbox" id="productIdToggle" checked="checked" />
                     Show ProductId
+                </label>
+                <label class="toggle-check">
+                    <input type="checkbox" id="subPricingToggle" checked="checked" />
+                    Show Subscription Pricing
                 </label>
                 <label class="toggle-check">
                     <input type="checkbox" id="subTermToggle" checked="checked" />
                     Show Subscription Term
                 </label>
                 <label class="toggle-check">
-                    <input type="checkbox" id="subTypeToggle" />
+                    <input type="checkbox" id="subTypeToggle" checked="checked" />
                     Show Subscription Type
                 </label>
                 <label class="toggle-check">
-                    <input type="checkbox" id="oppCountToggle" />
-                    Show Opp Products (last year)
+                    <input type="checkbox" id="oppCountToggle" checked="checked" />
+                    Show Opp Products (last 2 years)
                 </label>
             </div>
             <div class="right-buttons">
                 <button id="exportBtn" type="button">📊 Export to Excel</button>
+                <button id="soqlBtn" type="button">Show SOQL</button>
                 <div class="mode-toggle">
                     <button id="modeBtn" type="button">✋ Row drag &amp; drop mode</button>
                 </div>
@@ -497,10 +610,17 @@
 
     <div class="page-body">
         <div id="statusMsg">Loading data via AJAX Toolkit…</div>
+        <div id="divSOQL" class="cpq-soql" style="display: none;"></div>
+        <div id="progressBox">
+            <div class="progress-track"><div id="progressBar"></div></div>
+            <span id="progressText"></span>
+        </div>
+        <div id="staticView"></div>
         <table id="matrixTable" class="display" style="display:none;">
             <thead>
                 <tr id="headerRowTop"></tr>
                 <tr id="headerRow"></tr>
+                <tr id="headerRowUsage"></tr>
             </thead>
             <tbody id="bodyRows"></tbody>
         </table>
@@ -521,18 +641,30 @@
                               // (e.g. searching again before the initial default-filter load has returned)
                               // overwriting a newer, already-rendered result set
     var lastMatrixData = null; // snapshot of the currently-rendered search's data model, used by exportToExcel()
+    var lastSOQL = '';         // the SOQL(s) of the last search, for "Show SOQL"
 
     // Checkbox id -> GET param name, shared between updateUrlWithFilters() (write) and
     // applyUrlParamsToControls() (read), so a shared link reproduces which "Show ..." toggles were on.
     var CHECKBOX_PARAMS = {
+        interactiveToggle: "interactive",
         unitPriceToggle: "unitPrice",
         pbeIdToggle: "pbeId",
         productNameToggle: "productName",
         productIdToggle: "productId",
+        subPricingToggle: "subPricing",
         subTermToggle: "subTerm",
         subTypeToggle: "subType",
         oppCountToggle: "oppCount"
     };
+
+    // "Order by" picklist value -> SOQL ORDER BY of the Product2 query (= matrix row order).
+    // The trailing fields only break ties. Defined here, before applyUrlParamsToControls() validates ?orderBy=.
+    var ORDER_BY_CLAUSES = {
+        created: "CreatedDate DESC, ProductCode, Name",
+        code: "ProductCode, Name",
+        name: "Name, ProductCode"
+    };
+    var DEFAULT_ORDER_BY = "code"; // the option selected in the HTML; left out of the URL
 
     // Runs synchronously, before anything else reads checkbox/input state (in particular before the
     // jQuery(document).ready(...) block below, which - since this script sits at the end of <body> and
@@ -547,10 +679,20 @@
             var urlPricebookName = params.get("pricebookName");
             if (urlProductCode) { document.getElementById("filterInput").value = urlProductCode; }
             if (urlPricebookName) { document.getElementById("pricebookFilterInput").value = urlPricebookName; }
+            // Checked by default, so (unlike the "Show ..." toggles below) the param carries both states.
+            var urlIsActive = params.get("isActive");
+            if (urlIsActive !== null) { document.getElementById("productIsActiveInput").checked = urlIsActive !== "false"; }
+            var urlOrderBy = params.get("orderBy");
+            if (urlOrderBy && ORDER_BY_CLAUSES[urlOrderBy]) { document.getElementById("orderBySelect").value = urlOrderBy; }
+            // The field has a default value, so an empty ?productFilter= (cleared) is meaningful too.
+            var urlProductFilter = params.get("productFilter");
+            if (urlProductFilter !== null) { document.getElementById("productFilterInput").value = urlProductFilter; }
 
+            // "1" = on, "0" = off (needed for the toggles that are checked by default, e.g. Subscription Term)
             Object.keys(CHECKBOX_PARAMS).forEach(function (checkboxId) {
-                if (params.get(CHECKBOX_PARAMS[checkboxId]) !== null) {
-                    document.getElementById(checkboxId).checked = true;
+                var value = params.get(CHECKBOX_PARAMS[checkboxId]);
+                if (value !== null) {
+                    document.getElementById(checkboxId).checked = value !== "0";
                 }
             });
         } catch (e) {
@@ -572,10 +714,13 @@
     // filter (e.g. Product Code "%") that matches thousands of PricebookEntry rows would
     // silently return only the first batch - whichever products/pricebooks happen to sort
     // into it - instead of the full result set.
-    function queryAll(soql, onDone, onError) {
+    // onProgress (optional) is called with the number of records fetched so far after every batch.
+    function queryAll(soql, onDone, onError, onProgress) {
         var allRecords = [];
         function handleResult(result) {
-            allRecords = allRecords.concat(result.getArray("records") || []);
+            // push instead of concat: concat copies the whole array on every batch (quadratic on big results)
+            Array.prototype.push.apply(allRecords, result.getArray("records") || []);
+            if (onProgress) { onProgress(allRecords.length); }
             if (result.getBoolean("done")) {
                 onDone(allRecords);
             } else {
@@ -599,12 +744,17 @@
     // Id list is split into chunks that stay comfortably under the limit, queried separately via
     // queryAll() above, and merged into a single record list before onDone() is called once.
     var MAX_IDS_PER_QUERY_CHUNK = 3000; // ~3000 * ~21 chars ("'xxxxxxxxxxxxxxxxxx',") = ~63,000 chars, well under the 100,000 cap
-    function queryAllChunked(ids, buildQueryForChunk, onDone, onError) {
+    // Aggregate (GROUP BY) queries can't be continued with queryMore(), so their result must fit in
+    // one 2000-row batch - one group per Id at most, so a chunk of 2000 Ids can never exceed it.
+    var MAX_IDS_PER_AGGREGATE_CHUNK = 2000;
+    // onChunk (optional) is called after each chunk's query has finished (successfully or not), for the progress bar.
+    function queryAllChunked(ids, buildQueryForChunk, onDone, onError, chunkSize, onChunk) {
         if (ids.length === 0) { onDone([]); return; }
 
+        var size = chunkSize || MAX_IDS_PER_QUERY_CHUNK;
         var chunks = [];
-        for (var i = 0; i < ids.length; i += MAX_IDS_PER_QUERY_CHUNK) {
-            chunks.push(ids.slice(i, i + MAX_IDS_PER_QUERY_CHUNK));
+        for (var i = 0; i < ids.length; i += size) {
+            chunks.push(ids.slice(i, i + size));
         }
 
         var allRecords = [];
@@ -613,11 +763,13 @@
 
         chunks.forEach(function (chunk) {
             queryAll(buildQueryForChunk(chunk), function (records) {
+                if (onChunk) { onChunk(); }
                 if (failed) { return; }
                 allRecords = allRecords.concat(records);
                 remaining--;
                 if (remaining === 0) { onDone(allRecords); }
             }, function (error) {
+                if (onChunk) { onChunk(); }
                 if (failed) { return; }
                 failed = true;
                 onError(error);
@@ -636,12 +788,67 @@
             .replace(/'/g, "&#39;");
     }
 
-    function buildSoql(filterValue, pricebookFilterValue) {
+    // "Product: filters" field: a raw SOQL condition on Product2 fields, added as AND (...); empty = no filter.
+    // It is the user's own query in their own session (like SOQL Explorer), so it is not escaped.
+    function getProductFilter() {
+        return document.getElementById("productFilterInput").value.trim();
+    }
+
+    // Product filter (on Product2). A Product code filter of just "%" means "all products": the code
+    // clause is left out, so products with an empty ProductCode are included too (LIKE '%' never
+    // matches an empty code). Any other filter (e.g. %TRJN%) only matches products whose code fits it.
+    function buildProductWhere(filterValue, productIsActive) {
+        var where = "WHERE IsActive = " + (productIsActive ? "true" : "false");
+        if (filterValue !== "%") {
+            where += " AND ProductCode LIKE '" + escapeSoql(filterValue) + "'";
+        }
+        var productFilter = getProductFilter();
+        if (productFilter) { where += " AND (" + productFilter + ")"; }
+        return where;
+    }
+
+    // Rows of the matrix: every matching product, also the ones without any (matching) price book entry
+    function buildProductSoql(filterValue, productIsActive) {
+        return "SELECT Id, Name, ProductCode, IsActive, SBQQ__SubscriptionPricing__c, SBQQ__SubscriptionTerm__c, " +
+               "SBQQ__SubscriptionType__c FROM Product2 " + buildProductWhere(filterValue, productIsActive) +
+               " ORDER BY " + (ORDER_BY_CLAUSES[document.getElementById("orderBySelect").value] || ORDER_BY_CLAUSES[DEFAULT_ORDER_BY]);
+    }
+
+    // Cells of the matrix: the price book entries of those products (optionally only some pricebooks).
+    // The products are selected with a semi-join on the very same Product2 WHERE, so the "Product: filters"
+    // condition can use plain Product2 field names.
+    function buildSoql(filterValue, pricebookFilterValue, productIsActive) {
         var pricebookClause = pricebookFilterValue ? " AND Pricebook2.Name LIKE '" + escapeSoql(pricebookFilterValue) + "'" : "";
-        return "SELECT Id, Pricebook2.Name, IsActive, UnitPrice, Product2.Id, Product2.Name, Product2.ProductCode, Product2.IsActive, " +
-               "Product2.SBQQ__SubscriptionTerm__c, Product2.SBQQ__SubscriptionType__c, CurrencyIsoCode " +
-               "FROM PricebookEntry " +
-               "WHERE Product2.ProductCode LIKE '" + escapeSoql(filterValue) + "'" + pricebookClause;
+        return "SELECT Id, Pricebook2.Name, IsActive, UnitPrice, Product2Id, CurrencyIsoCode FROM PricebookEntry " +
+               "WHERE Product2Id IN (SELECT Id FROM Product2 " + buildProductWhere(filterValue, productIsActive) + ")" + pricebookClause;
+    }
+
+    // Cheap first step before the full fetch: how many products and price book entries the search
+    // matches, so the progress bar can show a real percentage while the batches come in.
+    function buildCountSoqls(filterValue, pricebookFilterValue, productIsActive) {
+        return {
+            products: "SELECT COUNT() FROM Product2 " + buildProductWhere(filterValue, productIsActive),
+            entries: buildSoql(filterValue, pricebookFilterValue, productIsActive)
+                .replace(/^SELECT .*? FROM PricebookEntry /, "SELECT COUNT() FROM PricebookEntry ")
+        };
+    }
+
+    function showProgress(text, percent) {
+        document.getElementById("progressBox").className = "visible";
+        document.getElementById("progressText").textContent = text;
+        document.getElementById("progressBar").style.width = (percent === null ? 0 : Math.max(0, Math.min(100, percent))) + "%";
+    }
+
+    function hideProgress() {
+        document.getElementById("progressBox").className = "";
+    }
+
+    // The AJAX Toolkit returns numbers as strings ("12.0" for a Number(3,0) field); show the value as
+    // stored (12), not the serialised form. Non-numeric text is shown unchanged.
+    function formatDbNumber(value) {
+        if (value === undefined || value === null || value === "") { return ""; }
+        var n = Number(value);
+        return isNaN(n) ? String(value) : String(n);
     }
 
     // window.location.origin (not a hardcoded org domain) so these drill-through links work on
@@ -649,7 +856,7 @@
     // org's Visualforce domain, so the origin it's running on IS the right one to link back into.
     var SOQL_EXPLORER_BASE = window.location.origin + "/apex/SOQLExplorer";
     function buildOppExplorerUrl(pbeId) {
-        var query = "select * from opportunityLineItem where PriceBookEntryId='" + pbeId + "' AND CreatedDate = LAST_N_DAYS:365";
+        var query = "select * from opportunityLineItem where PriceBookEntryId='" + pbeId + "' AND CreatedDate = LAST_N_DAYS:" + OPP_COUNT_DAYS;
         return SOQL_EXPLORER_BASE + "?q=" + encodeURIComponent(query) + "&flatView=false";
     }
     // Product-level total drill-through: filters by the exact PricebookEntryIds that were
@@ -658,7 +865,7 @@
     // rows against PricebookEntries outside the current filter and no longer match the shown total.
     function buildRowOppExplorerUrl(pbeIds) {
         var idList = pbeIds.map(function (id) { return "'" + id + "'"; }).join(",");
-        var query = "select * from opportunityLineItem where PricebookEntryId in (" + idList + ") AND CreatedDate = LAST_N_DAYS:365";
+        var query = "select * from opportunityLineItem where PricebookEntryId in (" + idList + ") AND CreatedDate = LAST_N_DAYS:" + OPP_COUNT_DAYS;
         return SOQL_EXPLORER_BASE + "?q=" + encodeURIComponent(query) + "&flatView=false";
     }
 
@@ -693,7 +900,7 @@
     // (i.e. have at least one SBQQ__ProductOption__c pointing at them). Note that
     // despite its name, SBQQ__ProductOption__c.SBQQ__ConfiguredSKU__c is a lookup
     // to the parent Product2's Id, not a text SKU/ProductCode (see CPQProductExplorer.page).
-    function loadBundleFlags(productIdByCode, onDone) {
+    function loadBundleFlags(productIdByCode, onDone, onChunk) {
         var ids = Object.keys(productIdByCode)
             .map(function (code) { return productIdByCode[code]; })
             .filter(function (id) { return !!id; });
@@ -713,22 +920,22 @@
         }, function (error) {
             console.error("Bundle lookup failed", error);
             onDone({}); // non-fatal: matrix still renders without bundle badges
-        });
+        }, MAX_IDS_PER_QUERY_CHUNK, onChunk);
     }
 
-    // Counts OpportunityLineItem records created in roughly the last year against each
+    // Counts OpportunityLineItem records created in the last `days` days against each
     // PricebookEntry Id from this search's results. Single grouped aggregate query (not one
     // query per cell), same IN-clause approach as loadBundleFlags() above - but keyed by
     // PricebookEntry Id (one per matrix cell) rather than Product2 Id (one per row), so the
     // IN-clause can be considerably larger for broad searches.
-    function loadOppCounts(pbeIds, onDone) {
+    function loadOppCounts(pbeIds, days, onDone, onChunk) {
         var ids = (pbeIds || []).filter(function (id) { return !!id; });
         if (ids.length === 0) { onDone({}); return; }
 
         queryAllChunked(ids, function (chunkIds) {
             var idList = chunkIds.map(function (id) { return "'" + escapeSoql(id) + "'"; }).join(",");
             return "SELECT PricebookEntryId, COUNT(Id) cnt FROM OpportunityLineItem " +
-                   "WHERE PricebookEntryId IN (" + idList + ") AND CreatedDate = LAST_N_DAYS:365 " +
+                   "WHERE PricebookEntryId IN (" + idList + ") AND CreatedDate = LAST_N_DAYS:" + days + " " +
                    "GROUP BY PricebookEntryId";
         }, function (records) {
             var counts = {};
@@ -741,112 +948,161 @@
             onDone(counts);
         }, function (error) {
             console.error("Opp product count lookup failed", error);
-            onDone({}); // non-fatal: matrix still renders without opp counts
+            onDone(null); // non-fatal: matrix still renders without opp counts
+        }, MAX_IDS_PER_AGGREGATE_CHUNK, onChunk);
+    }
+
+    var USAGE_DAYS_1Y = 365;
+    var USAGE_DAYS_5Y = 1825; // 5 * 365 - a rolling window, unlike LAST_N_YEARS which starts on 1 January
+    var OPP_COUNT_DAYS = 730; // "Show Opp Products (last 2 years)": per-cell counts, total column, drill-through links
+
+    // Fills one line ("365d" or "5y") of every usage header cell: the sum of the counts of the
+    // PricebookEntries shown in that column. Both copies of the header are updated - DataTables'
+    // scrollX keeps the visible header in a separate table and leaves a hidden clone in the body table.
+    function fillUsageHeader(lineClass, label, counts) {
+        document.querySelectorAll("th.usage-cell[data-col-index] ." + lineClass).forEach(function (line) {
+            if (!counts) { line.textContent = label + ": n/a"; return; }
+            var ids = (lastMatrixData.colPbeIds[line.parentNode.getAttribute("data-col-index")]) || [];
+            var total = ids.reduce(function (sum, id) { return sum + (counts[id] || 0); }, 0);
+            line.textContent = label + ": " + total;
         });
     }
 
-    function buildMatrix(records, filterValue, pricebookFilterValue, seq) {
-        var filterDesc = "Product Code LIKE '" + filterValue + "'" +
+    // One row per Product2 record (keyed by its Id): product codes are not unique and can be empty,
+    // so keying rows by ProductCode silently merged or dropped products. Products without a
+    // (matching) price book entry still get a row, with empty cells.
+    function buildMatrix(products, records, filterValue, pricebookFilterValue, productIsActive, seq) {
+        var filterDesc = "Product IsActive = " + (productIsActive ? "true" : "false") +
+            (filterValue !== "%" ? " AND Product Code LIKE '" + filterValue + "'" : "") +
+            (getProductFilter() ? " AND (" + getProductFilter() + ")" : "") +
             (pricebookFilterValue ? " AND Pricebook Name LIKE '" + pricebookFilterValue + "'" : "");
         document.getElementById("subtitle").textContent =
-            "Matrix view of PricebookEntry records where " + filterDesc;
+            "Matrix view of products and their PricebookEntry records where " + filterDesc;
 
-        if (!records || records.length === 0) {
-            showError("No PricebookEntry records found for " + escapeHtml(filterDesc) + ".");
+        if (!products || products.length === 0) {
+            showError("No products found for " + escapeHtml(filterDesc) + ".");
             return;
         }
 
-        var rowSet = {};             // Product2.ProductCode -> true
-        var pbNamesByCurrency = {};  // currency -> { pricebookName -> true }
-        var lookup = {};             // "productCode|||currency|||pricebookName" -> { isActive, unitPrice, pbeId }
-        var productActive = {};      // Product2.ProductCode -> Product2.IsActive (boolean)
-        var productId = {};          // Product2.ProductCode -> Product2.Id
-        var productName = {};        // Product2.ProductCode -> Product2.Name
-        var productSubTerm = {};     // Product2.ProductCode -> Product2.SBQQ__SubscriptionTerm__c (number of months, or null)
-        var productSubType = {};     // Product2.ProductCode -> Product2.SBQQ__SubscriptionType__c (picklist, or null)
-        var productPbeIds = {};      // Product2.ProductCode -> [PricebookEntry Id, ...], for the per-product opp-count total column
+        var rowOrder = [];           // Product2 Ids in query order (ORDER BY in buildProductSoql)
+        var currenciesByPricebook = {}; // pricebookName -> { currency -> true }
+        var lookup = {};             // "productId|||currency|||pricebookName" -> { isActive, unitPrice, pbeId }
+        var productCode = {};        // Product2.Id -> Product2.ProductCode ("" when empty)
+        var productActive = {};      // Product2.Id -> Product2.IsActive (boolean)
+        var productId = {};          // Product2.Id -> Product2.Id (row key -> Id, used by the bundle lookup)
+        var productName = {};        // Product2.Id -> Product2.Name
+        var productSubPricing = {};  // Product2.Id -> Product2.SBQQ__SubscriptionPricing__c (picklist, or null)
+        var productSubTerm = {};     // Product2.Id -> Product2.SBQQ__SubscriptionTerm__c (number of months, or null)
+        var productSubType = {};     // Product2.Id -> Product2.SBQQ__SubscriptionType__c (picklist, or null)
+        var productPbeIds = {};      // Product2.Id -> [PricebookEntry Id, ...], for the per-product opp-count total column
         var pbeIds = [];             // PricebookEntry Ids from this search's records, for the opp-count query
+
+        products.forEach(function (prod) {
+            var key = prod.Id;
+            if (productId[key]) { return; }
+            rowOrder.push(key);
+            productId[key] = key;
+            productCode[key] = prod.ProductCode || "";
+            productActive[key] = (prod.IsActive === true || prod.IsActive === "true");
+            productName[key] = prod.Name;
+            productSubPricing[key] = prod.SBQQ__SubscriptionPricing__c;
+            productSubTerm[key] = prod.SBQQ__SubscriptionTerm__c;
+            productSubType[key] = prod.SBQQ__SubscriptionType__c;
+        });
 
         for (var i = 0; i < records.length; i++) {
             var rec = records[i];
+            var key = rec.Product2Id;
+            if (!productId[key]) { continue; } // product not in the product query (should not happen)
             var pbName = rec.Pricebook2 && rec.Pricebook2.Name ? rec.Pricebook2.Name : "(Unknown Pricebook)";
             var currency = rec.CurrencyIsoCode || "(No Currency)";
-            var prodCode = rec.Product2 && rec.Product2.ProductCode ? rec.Product2.ProductCode : "(Unknown Code)";
             var isActive = (rec.IsActive === true || rec.IsActive === "true");
 
-            rowSet[prodCode] = true;
-            if (!pbNamesByCurrency[currency]) { pbNamesByCurrency[currency] = {}; }
-            pbNamesByCurrency[currency][pbName] = true;
-            lookup[prodCode + "|||" + currency + "|||" + pbName] = { isActive: isActive, unitPrice: rec.UnitPrice, pbeId: rec.Id };
+            if (!currenciesByPricebook[pbName]) { currenciesByPricebook[pbName] = {}; }
+            currenciesByPricebook[pbName][currency] = true;
+            lookup[key + "|||" + currency + "|||" + pbName] = { isActive: isActive, unitPrice: rec.UnitPrice, pbeId: rec.Id };
             if (rec.Id) {
                 pbeIds.push(rec.Id);
-                if (!productPbeIds[prodCode]) { productPbeIds[prodCode] = []; }
-                productPbeIds[prodCode].push(rec.Id);
-            }
-
-            if (rec.Product2) {
-                productActive[prodCode] = (rec.Product2.IsActive === true || rec.Product2.IsActive === "true");
-                productId[prodCode] = rec.Product2.Id;
-                productName[prodCode] = rec.Product2.Name;
-                productSubTerm[prodCode] = rec.Product2.SBQQ__SubscriptionTerm__c;
-                productSubType[prodCode] = rec.Product2.SBQQ__SubscriptionType__c;
+                if (!productPbeIds[key]) { productPbeIds[key] = []; }
+                productPbeIds[key].push(rec.Id);
             }
         }
 
-        // 2. Sort rows alphabetically, then push this specific product code to the very end
+        // 2. Rows in query order (Order by picklist), then push this specific product code to the very end
         var PINNED_LAST_ROW = "TRJN-AEOGEO-BRAND-RPRT_EMEA";
-        var allRowsSorted = Object.keys(rowSet).sort(function (a, b) { return a.localeCompare(b); });
-        var rowsMiddle = allRowsSorted.filter(function (name) { return name !== PINNED_LAST_ROW; });
-        var rowsEnd = allRowsSorted.filter(function (name) { return name === PINNED_LAST_ROW; });
+        var rowsMiddle = rowOrder.filter(function (key) { return productCode[key] !== PINNED_LAST_ROW; });
+        var rowsEnd = rowOrder.filter(function (key) { return productCode[key] === PINNED_LAST_ROW; });
         var rows = rowsMiddle.concat(rowsEnd);
 
-        var PINNED_COLUMNS_FIRST = [
-            "Standard Price Book",
-            "Nordic CPQ Pricebook",
-            "Swedish Price Book 2026 (SEK)",
-            "Norwegian Price Book 2026 (NOK)",
-            "Swedish Price Book 2026 (EUR)",
-            "Norwegian Price Book 2026 (EUR)",
-            "PRN Premium 2026",
-            "Finnish Price Book 2026 (EUR)"
-        ];
-
-        var PINNED_LAST_PATTERN = /\sPricebook$/;  // matches "<anything> Pricebook", e.g. "BNX Pricebook", "AEOGEO Pricebook"
-
-        // Order the pricebook names within a single currency group using the same
-        // pinned-first / pinned-last rules that used to apply to the flat column list.
-        function orderPricebookNames(pbNameSet) {
-            var allSorted = Object.keys(pbNameSet).sort(function (a, b) { return a.localeCompare(b); });
-            var pinned = PINNED_COLUMNS_FIRST.filter(function (name) { return pbNameSet.hasOwnProperty(name); });
-            var pinnedEnd = allSorted.filter(function (name) {
-                return PINNED_COLUMNS_FIRST.indexOf(name) === -1 && PINNED_LAST_PATTERN.test(name);
-            });
-            var remaining = allSorted.filter(function (name) {
-                return PINNED_COLUMNS_FIRST.indexOf(name) === -1 && !PINNED_LAST_PATTERN.test(name);
-            });
-            return pinned.concat(remaining).concat(pinnedEnd);
-        }
-
-        // 3. Build the two-level column list: currency (level 1) -> pricebook name (level 2)
-        var currencies = Object.keys(pbNamesByCurrency).sort(function (a, b) { return a.localeCompare(b); });
-        var currencyGroups = [];   // [{ currency, pbNames: [...] }]
+        // 3. Build the two-level column list: pricebook name (level 1, alphabetical; pricebooks named
+        // "(INACTIVE)..." go last, also alphabetical) -> currency (level 2, alphabetical within the pricebook)
+        function isInactivePricebook(name) { return name.indexOf("(INACTIVE)") === 0; }
+        var pbNames = Object.keys(currenciesByPricebook).sort(function (a, b) {
+            var ia = isInactivePricebook(a), ib = isInactivePricebook(b);
+            if (ia !== ib) { return ia ? 1 : -1; }
+            return a.localeCompare(b);
+        });
+        var pricebookGroups = [];  // [{ pbName, currencies: [...] }]
         var cols = [];             // flat [{ currency, pbName }] in render order, one entry per leaf column
 
-        currencies.forEach(function (currency) {
-            var pbNames = orderPricebookNames(pbNamesByCurrency[currency]);
-            currencyGroups.push({ currency: currency, pbNames: pbNames });
-            pbNames.forEach(function (pbName) {
+        pbNames.forEach(function (pbName) {
+            var currencies = Object.keys(currenciesByPricebook[pbName]).sort(function (a, b) { return a.localeCompare(b); });
+            pricebookGroups.push({ pbName: pbName, currencies: currencies });
+            currencies.forEach(function (currency) {
                 cols.push({ currency: currency, pbName: pbName });
             });
         });
 
-        // 3b. Build the two header rows: top row = currency groups (colspan), second row = pricebook names
+        // PricebookEntry Ids per pricebook column (only the products in view), for the usage row
+        var colPbeIds = cols.map(function (col) {
+            return rows.map(function (rowName) {
+                var entry = lookup[rowName + "|||" + col.currency + "|||" + col.pbName];
+                return entry ? entry.pbeId : null;
+            }).filter(function (id) { return !!id; });
+        });
+
+        // Snapshot the data model this render is based on so exportToExcel() (triggered by a
+        // separate button click, outside this async flow) and the static view can read it
+        // without touching the DOM.
+        lastMatrixData = {
+            interactive: document.getElementById("interactiveToggle").checked,
+            rows: rows,
+            cols: cols,
+            lookup: lookup,
+            productActive: productActive,
+            productId: productId,
+            productCode: productCode,
+            productName: productName,
+            productSubPricing: productSubPricing,
+            productSubTerm: productSubTerm,
+            productSubType: productSubType,
+            productPbeIds: productPbeIds,
+            colPbeIds: colPbeIds,
+            pbeIds: pbeIds,
+            bundleIds: {}, // filled in once loadBundleFlags() resolves, below
+            oppCounts: {}, // filled in once loadOppCounts() resolves, below
+            oppCounts1y: undefined, // usage row: undefined = still loading, null = query failed
+            oppCounts5y: undefined, // same, 5-year window (usage header row only)
+            pendingLoads: 4,        // bundle flags + 3 Opp Product counts still loading (see loadFinished)
+            whenLoaded: []          // callbacks waiting for all of them, e.g. Export to Excel
+        };
+
+        // Static view (Interactive view unchecked): one plain HTML table, built as a single string -
+        // no DataTables, no per-cell DOM building, so it stays fast with thousands of products.
+        if (!lastMatrixData.interactive) {
+            renderStatic(seq);
+            return;
+        }
+
+        // 3b. Build the three header rows: top row = pricebook names (colspan), second row = currencies,
+        // third row = usage of the column's PricebookEntries (filled in by loadOppCounts() below)
         var headerRowTop = document.getElementById("headerRowTop");
         var headerRow = document.getElementById("headerRow");
+        var headerRowUsage = document.getElementById("headerRowUsage");
 
         var thCorner = document.createElement("th");
         thCorner.className = "row-header-col";
-        thCorner.rowSpan = 2;
+        thCorner.rowSpan = 3;
         thCorner.textContent = "Product Code";
         headerRowTop.appendChild(thCorner);
 
@@ -855,41 +1111,61 @@
         // CSS); kept in sync with the actual sort state by the order.dt handler below once the
         // user clicks it or sorts some other column.
         thOppTotal.className = "row-header-col opp-total-header sorting";
-        thOppTotal.rowSpan = 2;
+        thOppTotal.rowSpan = 3;
         thOppTotal.appendChild(document.createTextNode("Opp"));
         thOppTotal.appendChild(document.createElement("br"));
-        thOppTotal.appendChild(document.createTextNode("Products(365d)"));
+        thOppTotal.appendChild(document.createTextNode("Products(2y)"));
         headerRowTop.appendChild(thOppTotal);
+
+        var thSubPricing = document.createElement("th");
+        thSubPricing.className = "row-header-col";
+        thSubPricing.rowSpan = 3;
+        thSubPricing.textContent = "Subscription Pricing";
+        headerRowTop.appendChild(thSubPricing);
 
         var thSubTerm = document.createElement("th");
         thSubTerm.className = "row-header-col";
-        thSubTerm.rowSpan = 2;
+        thSubTerm.rowSpan = 3;
         thSubTerm.textContent = "Subscription Term";
         headerRowTop.appendChild(thSubTerm);
 
         var thSubType = document.createElement("th");
         thSubType.className = "row-header-col";
-        thSubType.rowSpan = 2;
+        thSubType.rowSpan = 3;
         thSubType.textContent = "Subscription Type";
         headerRowTop.appendChild(thSubType);
 
-        currencyGroups.forEach(function (group) {
+        pricebookGroups.forEach(function (group) {
             var thGroup = document.createElement("th");
-            thGroup.className = "currency-group";
-            thGroup.colSpan = group.pbNames.length;
-            thGroup.textContent = group.currency;
+            thGroup.className = "pricebook-group";
+            thGroup.colSpan = group.currencies.length;
+            // One word per line narrows the column to its widest single word instead of the
+            // whole phrase; <br> forces a break even under the header's white-space:nowrap.
+            group.pbName.split(" ").forEach(function (word, idx) {
+                if (idx > 0) { thGroup.appendChild(document.createElement("br")); }
+                thGroup.appendChild(document.createTextNode(word));
+            });
             headerRowTop.appendChild(thGroup);
         });
 
         cols.forEach(function (col) {
             var th = document.createElement("th");
-            // One word per line narrows the column to its widest single word instead of the
-            // whole phrase; <br> forces a break even under the header's white-space:nowrap.
-            col.pbName.split(" ").forEach(function (word, idx) {
-                if (idx > 0) { th.appendChild(document.createElement("br")); }
-                th.appendChild(document.createTextNode(word));
-            });
+            th.textContent = col.currency;
             headerRow.appendChild(th);
+        });
+
+        cols.forEach(function (col, idx) {
+            var th = document.createElement("th");
+            th.className = "usage-cell";
+            th.setAttribute("data-col-index", idx);
+            th.title = "OpportunityLineItem records on this column's PricebookEntries";
+            [["usage-1y", "365d"], ["usage-5y", "5y"]].forEach(function (line) {
+                var span = document.createElement("span");
+                span.className = "usage-line " + line[0];
+                span.textContent = line[1] + ": ...";
+                th.appendChild(span);
+            });
+            headerRowUsage.appendChild(th);
         });
 
         // 4. Build body rows
@@ -899,11 +1175,11 @@
 
             var rowHeadCell = document.createElement("td");
             rowHeadCell.className = "product-code";
-            rowHeadCell.setAttribute("data-product-code", rowName);
+            rowHeadCell.setAttribute("data-row-key", rowName);
 
             var codeSpan = document.createElement("span");
             codeSpan.className = "product-code-text";
-            codeSpan.textContent = rowName;
+            codeSpan.textContent = productCode[rowName] || "(no product code)";
             rowHeadCell.appendChild(codeSpan);
 
             var isProdActive = productActive[rowName] === true;
@@ -932,7 +1208,7 @@
 
             var oppTotalLink = document.createElement("a");
             oppTotalLink.className = "opp-total-link";
-            oppTotalLink.setAttribute("data-product-code", rowName);
+            oppTotalLink.setAttribute("data-row-key", rowName);
             var rowPbeIds = productPbeIds[rowName] || [];
             if (rowPbeIds.length > 0) {
                 oppTotalLink.href = buildRowOppExplorerUrl(rowPbeIds);
@@ -941,10 +1217,14 @@
             }
             oppTotalCell.appendChild(oppTotalLink);
 
-            var subTermValue = productSubTerm[rowName];
+            var subPricingCell = document.createElement("td");
+            subPricingCell.className = "subscription-term";
+            appendTextOrDash(subPricingCell, productSubPricing[rowName]);
+            tr.appendChild(subPricingCell);
+
             var subTermCell = document.createElement("td");
             subTermCell.className = "subscription-term";
-            appendTextOrDash(subTermCell, (subTermValue === undefined || subTermValue === null || subTermValue === "") ? "" : (subTermValue + " mo"));
+            appendTextOrDash(subTermCell, formatDbNumber(productSubTerm[rowName]));
             tr.appendChild(subTermCell);
 
             var subTypeCell = document.createElement("td");
@@ -993,22 +1273,6 @@
             tbody.appendChild(tr);
         });
 
-        // Snapshot the data model this render is based on so exportToExcel() (triggered by a
-        // separate button click, outside this async flow) can read it without touching the DOM.
-        lastMatrixData = {
-            rows: rows,
-            cols: cols,
-            lookup: lookup,
-            productActive: productActive,
-            productId: productId,
-            productName: productName,
-            productSubTerm: productSubTerm,
-            productSubType: productSubType,
-            productPbeIds: productPbeIds,
-            bundleIds: {}, // filled in once loadBundleFlags() resolves, below
-            oppCounts: {}  // filled in once loadOppCounts() resolves, below
-        };
-
         // 5. Reveal table, hide status, then activate DataTables
         document.getElementById("statusMsg").style.display = "none";
         var tableEl = document.getElementById("matrixTable");
@@ -1019,7 +1283,7 @@
                 paging: false,        // show all rows, no pagination
                 info: false,          // hide the "Showing 1 to N of N entries" footer text (paging:false already shows every row)
                 searching: false,     // hide DataTables' own "Search:" box - redundant with the "Product Code filter (SOQL LIKE)" input above, which re-queries Salesforce
-                order: [], // keep our alphabetical build order by default
+                order: [], // keep our build order (the SOQL ORDER BY) by default
                 scrollX: true,        // horizontal scrollbar when columns overflow
                 scrollY: "100%",      // vertical scrollbar; fills the flex-grown wrapper (see CSS)
                 scrollCollapse: true,
@@ -1036,8 +1300,9 @@
                 // BOTTOM header row (the leaf pricebook-name cells) when headers span multiple rows.
                 colReorder: false,    // grouped currency headers (colspan) aren't supported by ColReorder
                 // Column indices are fixed: 0 Product Code, 1 Opp Products Total, 2 Subscription
-                // Term, 3 Subscription Type, then the currency/pricebook pivot columns from index 4 on.
-                // Column 1 is NOT toggled here via DataTables' own visible: option like columns 2/3
+                // Pricing, 3 Subscription Term, 4 Subscription Type, then the pricebook/currency pivot
+                // columns from index 5 on.
+                // Column 1 is NOT toggled here via DataTables' own visible: option like columns 2-4
                 // below - it's filled in asynchronously (once loadOppCounts() resolves, below), and
                 // DataTables' column().visible(false) removes a hidden column's cells from the DOM
                 // entirely, which would silently discard that async fill if the column started
@@ -1053,8 +1318,9 @@
                 // and get NaN for every row - "html-num" strips the tag first.
                 columnDefs: [
                     { targets: 1, type: "html-num" },
-                    { targets: 2, visible: $("#subTermToggle").is(":checked") },
-                    { targets: 3, visible: $("#subTypeToggle").is(":checked") }
+                    { targets: 2, visible: $("#subPricingToggle").is(":checked") },
+                    { targets: 3, visible: $("#subTermToggle").is(":checked") },
+                    { targets: 4, visible: $("#subTypeToggle").is(":checked") }
                 ],
                 rowReorder: {         // drag the first cell of a row to reorder rows
                     selector: "td.product-code"
@@ -1073,14 +1339,18 @@
             // main matrix isn't blocked waiting on a second round-trip. Guard against a
             // slower, now-stale search's bundle lookup landing after a newer search has
             // already rebuilt the table (same race this whole `seq` token exists to prevent).
+            var model = lastMatrixData;
+            startBackgroundProgress(model);
+            function onChunk() { chunkFinished(model); }
             loadBundleFlags(productId, function (bundleIds) {
                 if (seq !== requestSeq) { return; }
                 lastMatrixData.bundleIds = bundleIds;
-                rows.forEach(function (code) {
-                    var pid = productId[code];
+                loadFinished(lastMatrixData);
+                rows.forEach(function (key) { // key = Product2.Id
+                    var pid = productId[key];
                     if (!pid || !bundleIds[pid]) { return; }
 
-                    var cell = tableEl.querySelector('td.product-code[data-product-code="' + CSS.escape(code) + '"]');
+                    var cell = tableEl.querySelector('td.product-code[data-row-key="' + CSS.escape(key) + '"]');
                     if (!cell) { return; }
 
                     var bundleBadge = document.createElement("span");
@@ -1090,14 +1360,34 @@
                 });
 
                 if (dt) { dt.columns.adjust(); }
-            });
+            }, onChunk);
 
             // Opp-product counts load asynchronously in parallel with the bundle-flag lookup
             // above (two independent round-trips, no reason to chain them); same `seq` guard
             // discards a stale response if a newer search has started since this one fired.
-            loadOppCounts(pbeIds, function (oppCounts) {
+            // 5-year usage feeds only the usage header row; separate round-trip, same `seq` guard.
+            loadOppCounts(pbeIds, USAGE_DAYS_5Y, function (counts5y) {
                 if (seq !== requestSeq) { return; }
+                lastMatrixData.oppCounts5y = counts5y;
+                loadFinished(lastMatrixData);
+                fillUsageHeader("usage-5y", "5y", counts5y);
+                if (dt) { dt.columns.adjust(); }
+            }, onChunk);
+
+            loadOppCounts(pbeIds, USAGE_DAYS_1Y, function (counts1y) {
+                if (seq !== requestSeq) { return; }
+                fillUsageHeader("usage-1y", "365d", counts1y);
+                lastMatrixData.oppCounts1y = counts1y;
+                loadFinished(lastMatrixData);
+                if (dt) { dt.columns.adjust(); }
+            }, onChunk);
+
+            // "Show Opp Products (last 2 years)": per-cell counts + per-product total column
+            loadOppCounts(pbeIds, OPP_COUNT_DAYS, function (countsOpp) {
+                if (seq !== requestSeq) { return; }
+                var oppCounts = countsOpp || {};
                 lastMatrixData.oppCounts = oppCounts;
+                loadFinished(lastMatrixData);
                 tableEl.querySelectorAll(".opp-count-oli[data-pbe-id]").forEach(function (link) {
                     var pbeId = link.getAttribute("data-pbe-id");
                     if (!pbeId) { return; }
@@ -1108,9 +1398,9 @@
                 // pivot cell in the row), not just one - uses productPbeIds built above. Only the
                 // link's text is filled in here - its href (the drill-through URL) was already
                 // set synchronously at cell-build time, since productPbeIds is known up front.
-                tableEl.querySelectorAll(".opp-total-link[data-product-code]").forEach(function (link) {
-                    var code = link.getAttribute("data-product-code");
-                    var ids = productPbeIds[code] || [];
+                tableEl.querySelectorAll(".opp-total-link[data-row-key]").forEach(function (link) {
+                    var key = link.getAttribute("data-row-key"); // Product2.Id
+                    var ids = productPbeIds[key] || [];
                     var total = ids.reduce(function (sum, id) { return sum + (oppCounts[id] || 0); }, 0);
                     link.textContent = total;
                 });
@@ -1118,7 +1408,7 @@
                 // Column 1's cells were set directly via textContent above, bypassing DataTables'
                 // own data APIs, so its cached sort data (captured empty at init time) is now
                 // stale - invalidate it from the live DOM so a later click on the "Opp
-                // Products(365d)" header (see the delegated click handler below) sorts by the
+                // Products(2y)" header (see the delegated click handler below) sorts by the
                 // actual totals instead of the empty values that were there at page load. No
                 // dt.draw() here - invalidate() alone doesn't force a redraw, and forcing one
                 // here (via scrollX's header-clone resync) while flex layout may still be
@@ -1128,12 +1418,77 @@
                     dt.cells(null, 1).invalidate("dom");
                     dt.columns.adjust();
                 }
-            });
+            }, onChunk);
         });
     }
 
-    function runQuery(filterValue, pricebookFilterValue) {
+    // One line per clause, so the queries are readable in the "Show SOQL" panel
+    function formatSoql(soql) {
+        return soql.replace(/ FROM /g, "\nFROM ").replace(/ WHERE /g, "\nWHERE ")
+                   .replace(/ AND /g, "\n  AND ").replace(/ GROUP BY /g, "\nGROUP BY ").replace(/ ORDER BY /g, "\nORDER BY ");
+    }
+
+    // Every query this search runs, in order. The follow-up queries are split into chunks of Ids,
+    // so they are shown with a placeholder instead of the (possibly thousands of) Ids.
+    function describeSearchSoql(filterValue, pricebookFilterValue, productIsActive) {
+        var oppSoql = "SELECT PricebookEntryId, COUNT(Id) cnt FROM OpportunityLineItem " +
+                      "WHERE PricebookEntryId IN (...PricebookEntry Ids from query 4...) AND CreatedDate = LAST_N_DAYS:";
+        var counts = buildCountSoqls(filterValue, pricebookFilterValue, productIsActive);
+        return [
+            "1. Count of matching products (progress bar)",
+            formatSoql(counts.products),
+            "",
+            "2. Count of matching price book entries (progress bar)",
+            formatSoql(counts.entries),
+            "",
+            "3. Products (the rows of the matrix)",
+            formatSoql(buildProductSoql(filterValue, productIsActive)),
+            "",
+            "4. Price book entries (the cells of the matrix)",
+            formatSoql(buildSoql(filterValue, pricebookFilterValue, productIsActive)),
+            "",
+            "5. Bundle flags",
+            formatSoql("SELECT SBQQ__ConfiguredSKU__c FROM SBQQ__ProductOption__c " +
+                       "WHERE SBQQ__ConfiguredSKU__c IN (...Product Ids from query 3...)"),
+            "",
+            "6. Usage 365d (usage header row)",
+            formatSoql(oppSoql + USAGE_DAYS_1Y + " GROUP BY PricebookEntryId"),
+            "",
+            "7. Show Opp Products (last 2 years)",
+            formatSoql(oppSoql + OPP_COUNT_DAYS + " GROUP BY PricebookEntryId"),
+            "",
+            "8. Usage 5y (usage header row)",
+            formatSoql(oppSoql + USAGE_DAYS_5Y + " GROUP BY PricebookEntryId")
+        ].join("\n");
+    }
+
+    function showSoqlText() {
+        document.getElementById("divSOQL").textContent = lastSOQL ? lastSOQL : "No query run yet.";
+    }
+
+    function toggleSOQL() {
+        var div = document.getElementById("divSOQL");
+        if (div.style.display == "none") {
+            showSoqlText();
+            div.style.display = "";
+        } else {
+            div.style.display = "none";
+        }
+        if (dt) { dt.columns.adjust(); }
+    }
+
+    function runQuery(filterValue, pricebookFilterValue, productIsActive) {
         var seq = ++requestSeq; // this call now owns "latest"; any in-flight older call's response gets ignored
+        lastSOQL = describeSearchSoql(filterValue, pricebookFilterValue, productIsActive);
+        showSoqlText(); // an open panel follows the new search
+
+        // An export still waiting for the previous search's counts is dropped with that search.
+        lastMatrixData = null;
+        var exportBtn = document.getElementById("exportBtn");
+        if (exportBtn.disabled) {
+            exportBtn.disabled = false;
+            exportBtn.textContent = exportBtn.getAttribute("data-label");
+        }
 
         // DataTables.destroy() restores the table to the DOM snapshot it captured at its
         // OWN initialization time, discarding anything inserted into the DOM afterward. So
@@ -1147,24 +1502,73 @@
 
         var statusEl = document.getElementById("statusMsg");
         statusEl.className = "";
-        statusEl.style.display = "";
-        statusEl.textContent = "Loading data via AJAX Toolkit…";
+        statusEl.style.display = "none"; // the progress bar shows the loading state; showError() re-shows this
+        statusEl.textContent = "";
 
         document.getElementById("matrixTable").style.display = "none";
         document.getElementById("headerRowTop").innerHTML = "";
         document.getElementById("headerRow").innerHTML = "";
+        document.getElementById("headerRowUsage").innerHTML = "";
+        var staticView = document.getElementById("staticView");
+        staticView.style.display = "none";
+        staticView.innerHTML = "";
         document.getElementById("bodyRows").innerHTML = "";
 
-        try {
-            queryAll(buildSoql(filterValue, pricebookFilterValue), function (records) {
-                if (seq !== requestSeq) { return; } // a newer search started before this one returned
-                buildMatrix(records, filterValue, pricebookFilterValue, seq);
-            }, function (error) {
+        function fail(error) {
+            if (seq !== requestSeq) { return; }
+            hideProgress();
+            showError(error);
+        }
+
+        // Step 1: count what the search matches; step 2: fetch the products, then their price book
+        // entries, batch by batch, updating the progress bar after each batch (one percentage over
+        // both fetches). A failed count only costs the percentage.
+        function fetchAll(productTotal, entryTotal) {
+            var total = (productTotal === null || entryTotal === null) ? null : productTotal + entryTotal;
+            function progress(label, loaded, totalOfStep, done) {
                 if (seq !== requestSeq) { return; }
-                showError(error);
+                var pct = total ? Math.round((done + loaded) * 100 / total) : null;
+                showProgress("Loading " + label + ": " + loaded.toLocaleString() +
+                    (totalOfStep === null ? "" : " of " + totalOfStep.toLocaleString()) +
+                    (pct === null ? "" : " - " + pct + "%"), pct);
+            }
+            progress("products", 0, productTotal, 0);
+            queryAll(buildProductSoql(filterValue, productIsActive), function (products) {
+                if (seq !== requestSeq) { return; } // a newer search started before this one returned
+                progress("price book entries", 0, entryTotal, products.length);
+                queryAll(buildSoql(filterValue, pricebookFilterValue, productIsActive), function (records) {
+                    if (seq !== requestSeq) { return; }
+                    showProgress("Building the table (" + products.length.toLocaleString() + " products, " +
+                        records.length.toLocaleString() + " entries)...", 100);
+                    // let the browser paint the 100% before the (synchronous) table build
+                    setTimeout(function () {
+                        if (seq !== requestSeq) { return; }
+                        hideProgress();
+                        buildMatrix(products, records, filterValue, pricebookFilterValue, productIsActive, seq);
+                    }, 0);
+                }, fail, function (loaded) { progress("price book entries", loaded, entryTotal, products.length); });
+            }, fail, function (loaded) { progress("products", loaded, productTotal, 0); });
+        }
+
+        function count(soql, onDone) {
+            sforce.connection.query(soql, {
+                onSuccess: function (result) { var n = Number(result.size); onDone(isNaN(n) ? null : n); },
+                onFailure: function (error) { console.error("Count query failed, loading without a percentage", error); onDone(null); }
+            });
+        }
+
+        try {
+            showProgress("Counting matching products...", 0);
+            var countSoqls = buildCountSoqls(filterValue, pricebookFilterValue, productIsActive);
+            count(countSoqls.products, function (productTotal) {
+                if (seq !== requestSeq) { return; }
+                count(countSoqls.entries, function (entryTotal) {
+                    if (seq !== requestSeq) { return; }
+                    fetchAll(productTotal, entryTotal);
+                });
             });
         } catch (e) {
-            if (seq === requestSeq) { showError(e.message || e); }
+            fail(e.message || e);
         }
     }
 
@@ -1172,9 +1576,18 @@
     // params) so the URL is bookmarkable/shareable; applyUrlParamsToControls() above reads these back
     // as the page's default values on load. replaceState (not pushState) since every search shouldn't
     // add a new browser-history entry.
-    function updateUrlWithFilters(filterValue, pricebookFilterValue) {
+    function updateUrlWithFilters(filterValue, pricebookFilterValue, productIsActive) {
         try {
             var params = new URLSearchParams(window.location.search);
+            params.set("isActive", productIsActive ? "true" : "false");
+            var orderBy = document.getElementById("orderBySelect").value;
+            if (orderBy !== DEFAULT_ORDER_BY) { params.set("orderBy", orderBy); } else { params.delete("orderBy"); }
+            var productFilterBox = document.getElementById("productFilterInput");
+            if (productFilterBox.value.trim() !== productFilterBox.defaultValue.trim()) {
+                params.set("productFilter", productFilterBox.value.trim());
+            } else {
+                params.delete("productFilter");
+            }
             params.set("productCode", filterValue);
             if (pricebookFilterValue) {
                 params.set("pricebookName", pricebookFilterValue);
@@ -1182,10 +1595,12 @@
                 params.delete("pricebookName");
             }
 
+            // Only toggles that differ from their HTML default go into the URL ("1" on / "0" off).
             Object.keys(CHECKBOX_PARAMS).forEach(function (checkboxId) {
                 var paramName = CHECKBOX_PARAMS[checkboxId];
-                if (document.getElementById(checkboxId).checked) {
-                    params.set(paramName, "1");
+                var box = document.getElementById(checkboxId);
+                if (box.checked !== box.defaultChecked) {
+                    params.set(paramName, box.checked ? "1" : "0");
                 } else {
                     params.delete(paramName);
                 }
@@ -1206,8 +1621,9 @@
             document.getElementById("filterInput").value = DEFAULT_FILTER;
         }
         var pricebookFilterValue = document.getElementById("pricebookFilterInput").value.trim();
-        updateUrlWithFilters(filterValue, pricebookFilterValue);
-        runQuery(filterValue, pricebookFilterValue);
+        var productIsActive = document.getElementById("productIsActiveInput").checked;
+        updateUrlWithFilters(filterValue, pricebookFilterValue, productIsActive);
+        runQuery(filterValue, pricebookFilterValue, productIsActive);
     }
 
     // Exports exactly what's currently on screen: it reads the same "Show ..." checkboxes
@@ -1217,6 +1633,7 @@
     function buildExportTableHtml() {
         if (!lastMatrixData) { return null; }
         var d = lastMatrixData;
+        var showSubPricing = document.getElementById("subPricingToggle").checked;
         var showSubTerm = document.getElementById("subTermToggle").checked;
         var showSubType = document.getElementById("subTypeToggle").checked;
         var showPrice = document.getElementById("unitPriceToggle").checked;
@@ -1226,16 +1643,17 @@
         var showOppCount = document.getElementById("oppCountToggle").checked;
 
         var headers = ["Product Code", "Product Status", "Bundle"];
-        if (showOppCount) { headers.push("Opp Products(365d)"); }
+        if (showOppCount) { headers.push("Opp Products(2y)"); }
         if (showProductName) { headers.push("Product Name"); }
         if (showProductId) { headers.push("ProductId"); }
+        if (showSubPricing) { headers.push("Subscription Pricing"); }
         if (showSubTerm) { headers.push("Subscription Term"); }
         if (showSubType) { headers.push("Subscription Type"); }
-        d.cols.forEach(function (col) { headers.push(col.currency + " - " + col.pbName); });
+        d.cols.forEach(function (col) { headers.push(col.pbName + " - " + col.currency); });
 
         var bodyRowsHtml = d.rows.map(function (rowName) {
             var cells = [];
-            cells.push(rowName);
+            cells.push(d.productCode[rowName] || "");
             cells.push(d.productActive[rowName] ? "Active" : "Inactive");
 
             var pid = d.productId[rowName];
@@ -1249,10 +1667,8 @@
             if (showProductName) { cells.push(d.productName[rowName] || ""); }
             if (showProductId) { cells.push(pid || ""); }
 
-            if (showSubTerm) {
-                var subTerm = d.productSubTerm[rowName];
-                cells.push((subTerm === undefined || subTerm === null || subTerm === "") ? "" : (subTerm + " mo"));
-            }
+            if (showSubPricing) { cells.push(d.productSubPricing[rowName] || ""); }
+            if (showSubTerm) { cells.push(formatDbNumber(d.productSubTerm[rowName])); }
             if (showSubType) { cells.push(d.productSubType[rowName] || ""); }
 
             d.cols.forEach(function (col) {
@@ -1267,7 +1683,7 @@
                 if (showPbeId && entry.pbeId) { text += " [" + entry.pbeId + "]"; }
                 if (showOppCount) {
                     var oppCount = (d.oppCounts && d.oppCounts[entry.pbeId]) || 0;
-                    text += " {OppCount365d: " + oppCount + "}";
+                    text += " {OppCount2y: " + oppCount + "}";
                 }
                 cells.push(text);
             });
@@ -1275,8 +1691,64 @@
             return "<tr>" + cells.map(function (c) { return "<td>" + escapeHtml(c) + "</td>"; }).join("") + "</tr>";
         }).join("");
 
-        var headHtml = "<tr>" + headers.map(function (h) { return "<th>" + escapeHtml(h) + "</th>"; }).join("") + "</tr>";
+        var labelsRowHtml = "<tr>" + headers.map(function (h) { return "<th>" + escapeHtml(h) + "</th>"; }).join("") + "</tr>";
+
+        // First header row: API names + usage of each pricebook column (same sums as the interactive
+        // usage row); the column labels row comes right above the data
+        function usageText(counts, ids) {
+            if (counts === undefined) { return "..."; }
+            if (counts === null) { return "n/a"; }
+            return String(ids.reduce(function (sum, id) { return sum + (counts[id] || 0); }, 0));
+        }
+        // Product2 field API names under their columns; the usage label goes under Product Code
+        var FIELD_API_NAMES = {
+            "Subscription Pricing": "SBQQ__SubscriptionPricing__c",
+            "Subscription Term": "SBQQ__SubscriptionTerm__c",
+            "Subscription Type": "SBQQ__SubscriptionType__c"
+        };
+        var fixedCount = headers.length - d.cols.length;
+        var usageCells = [];
+        for (var u = 0; u < fixedCount; u++) {
+            usageCells.push(u === 0 ? "Usage (Opp Products)" : (FIELD_API_NAMES[headers[u]] || ""));
+        }
+        d.cols.forEach(function (col, idx) {
+            var ids = d.colPbeIds[idx] || [];
+            usageCells.push("365d: " + usageText(d.oppCounts1y, ids) + " / 5y: " + usageText(d.oppCounts5y, ids));
+        });
+        var headHtml = "<tr>" + usageCells.map(function (h) { return "<th>" + escapeHtml(h) + "</th>"; }).join("") + "</tr>" +
+                       labelsRowHtml;
+
         return "<table border=\"1\"><thead>" + headHtml + "</thead><tbody>" + bodyRowsHtml + "</tbody></table>";
+    }
+
+    // Static view: the same table as the Excel export, shown as plain HTML. Drawn straight away, then
+    // redrawn as the bundle flags and usage counts arrive (string build + one innerHTML - cheap).
+    function drawStatic() {
+        var box = document.getElementById("staticView");
+        box.innerHTML = buildExportTableHtml() || "";
+        box.style.display = "block";
+    }
+
+    function renderStatic(seq) {
+        var d = lastMatrixData;
+        document.getElementById("statusMsg").style.display = "none";
+        document.getElementById("matrixTable").style.display = "none";
+        drawStatic();
+
+        function redraw(apply) {
+            return function (result) {
+                if (seq !== requestSeq) { return; } // a newer search has replaced this data
+                apply(result);
+                drawStatic();
+                loadFinished(d);
+            };
+        }
+        startBackgroundProgress(d);
+        function onChunk() { chunkFinished(d); }
+        loadBundleFlags(d.productId, redraw(function (bundleIds) { d.bundleIds = bundleIds; }), onChunk);
+        loadOppCounts(d.pbeIds, USAGE_DAYS_1Y, redraw(function (counts) { d.oppCounts1y = counts; }), onChunk);
+        loadOppCounts(d.pbeIds, OPP_COUNT_DAYS, redraw(function (counts) { d.oppCounts = counts || {}; }), onChunk);
+        loadOppCounts(d.pbeIds, USAGE_DAYS_5Y, redraw(function (counts) { d.oppCounts5y = counts; }), onChunk);
     }
 
     // A plain HTML table saved with a .xls extension and the ms-excel MIME type opens
@@ -1300,10 +1772,57 @@
         URL.revokeObjectURL(link.href);
     }
 
+    // Progress bar for the background loads after the table is shown: bundle flags (Product Ids in
+    // chunks of MAX_IDS_PER_QUERY_CHUNK) + three Opp Product counts (PricebookEntry Ids in chunks of
+    // MAX_IDS_PER_AGGREGATE_CHUNK), counted query by query.
+    function startBackgroundProgress(d) {
+        var productCount = Object.keys(d.productId).length;
+        d.chunksTotal = Math.ceil(productCount / MAX_IDS_PER_QUERY_CHUNK) + 3 * Math.ceil(d.pbeIds.length / MAX_IDS_PER_AGGREGATE_CHUNK);
+        d.chunksDone = 0;
+        showBackgroundProgress(d);
+    }
+
+    function showBackgroundProgress(d) {
+        if (d !== lastMatrixData || d.pendingLoads <= 0) { return; }
+        var pct = d.chunksTotal ? Math.round(d.chunksDone * 100 / d.chunksTotal) : 0;
+        showProgress("Loading usage counts and bundle flags: " + d.chunksDone + " of " + d.chunksTotal +
+            " queries - " + pct + "%", pct);
+    }
+
+    function chunkFinished(d) {
+        d.chunksDone++;
+        showBackgroundProgress(d);
+    }
+
+    // One of the background loads (bundle flags, Opp Product counts) of this data model has finished;
+    // once all have, hide the progress bar and run whatever was waiting for them.
+    function loadFinished(d) {
+        d.pendingLoads--;
+        if (d.pendingLoads > 0) { return; }
+        if (d === lastMatrixData) { hideProgress(); }
+        var waiting = d.whenLoaded;
+        d.whenLoaded = [];
+        waiting.forEach(function (fn) { fn(); });
+    }
+
+    // The file is only built once every background count has arrived - otherwise it would contain
+    // the "..." placeholders of counts that are still loading (the 5-year one is the slowest).
     function exportToExcel() {
-        var tableHtml = buildExportTableHtml();
-        if (!tableHtml) { return; } // no search has completed yet
-        downloadExcel("products-and-pricebooks.xls", tableHtml);
+        var d = lastMatrixData;
+        if (!d) { return; } // no search has completed yet
+        var btn = document.getElementById("exportBtn");
+        function run() {
+            btn.disabled = false;
+            btn.textContent = btn.getAttribute("data-label");
+            if (d !== lastMatrixData) { return; } // a new search started meanwhile
+            downloadExcel("products-and-pricebooks.xls", buildExportTableHtml());
+        }
+        if (d.pendingLoads <= 0) { downloadExcel("products-and-pricebooks.xls", buildExportTableHtml()); return; }
+        if (btn.disabled) { return; } // already waiting
+        btn.setAttribute("data-label", btn.textContent);
+        btn.disabled = true;
+        btn.textContent = "Waiting for usage counts...";
+        d.whenLoaded.push(run);
     }
 
     // Row-dragging and native text selection both want to own mousedown on the
@@ -1329,7 +1848,14 @@
         });
 
         $("#searchBtn").on("click", runSearch);
-        $("#filterInput, #pricebookFilterInput").on("keydown", function (e) {
+        // A checkbox has no Enter key to submit with, so toggling it re-runs the search directly.
+        $("#productIsActiveInput, #orderBySelect").on("change", runSearch);
+        // Clear empties "Product: filters" (= no extra product condition) and searches again.
+        $("#productFilterClearBtn").on("click", function () {
+            document.getElementById("productFilterInput").value = "";
+            runSearch();
+        });
+        $("#filterInput, #pricebookFilterInput, #productFilterInput").on("keydown", function (e) {
             if (e.key === "Enter" || e.keyCode === 13) {
                 e.preventDefault();
                 runSearch();
@@ -1372,14 +1898,28 @@
             if (dt) { dt.columns.adjust(); }
         });
 
-        // Subscription Term / Type are real DataTable columns (not always-rendered cells like
+        // Subscription Pricing / Term / Type are real DataTable columns (not always-rendered cells like
         // unit price), so toggling them uses DataTables' own column visibility API, which
         // correctly handles the rowspanned header cells too. (Opp Products Total, column 1, is
         // handled by the oppCountToggle CSS toggle above instead - see the columnDefs comment.)
-        $("#subTermToggle").on("change", function () { if (dt) { dt.column(2).visible(this.checked); } });
-        $("#subTypeToggle").on("change", function () { if (dt) { dt.column(3).visible(this.checked); } });
+        $("#subPricingToggle").on("change", function () { if (dt) { dt.column(2).visible(this.checked); } });
+        $("#subTermToggle").on("change", function () { if (dt) { dt.column(3).visible(this.checked); } });
+        $("#subTypeToggle").on("change", function () { if (dt) { dt.column(4).visible(this.checked); } });
 
         $("#exportBtn").on("click", exportToExcel);
+        $("#soqlBtn").on("click", toggleSOQL);
+
+        // Switching between the interactive and the static view rebuilds the table, so search again.
+        // The drag and drop / text-select mode button only applies to the interactive view.
+        document.body.classList.toggle("interactive-view", $("#interactiveToggle").is(":checked"));
+        $("#interactiveToggle").on("change", function () {
+            document.body.classList.toggle("interactive-view", this.checked);
+            runSearch();
+        });
+        // In the static view every "Show ..." toggle just redraws the plain table from the data model.
+        $(".show-toggles input[type=checkbox]").not("#interactiveToggle").on("change", function () {
+            if (lastMatrixData && !lastMatrixData.interactive) { drawStatic(); }
+        });
 
         // Folds away the subtitle + filter/toggle/action controls so the header shrinks to a
         // single title row, giving the matrix table the rest of the viewport. Unfolded (expanded)
@@ -1392,7 +1932,7 @@
             if (dt) { dt.columns.adjust(); }
         });
 
-        // "Opp Products(365d)" (column 1) isn't part of DataTables' automatic header-click
+        // "Opp Products(2y)" (column 1) isn't part of DataTables' automatic header-click
         // sorting (see the columnDefs comment above: orderCellsTop is left false, so only the
         // bottom header row's leaf pricebook cells get that wired up automatically). Delegated
         // (not bound directly to the th) because buildMatrix() recreates the header cells on
@@ -1441,7 +1981,8 @@
     function init() {
         runQuery(
             document.getElementById("filterInput").value || DEFAULT_FILTER,
-            document.getElementById("pricebookFilterInput").value.trim()
+            document.getElementById("pricebookFilterInput").value.trim(),
+            document.getElementById("productIsActiveInput").checked
         );
     }
     if (document.readyState === "loading") {
