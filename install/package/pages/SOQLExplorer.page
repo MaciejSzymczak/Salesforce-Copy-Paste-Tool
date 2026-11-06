@@ -1033,6 +1033,7 @@ Use this tool to visualise the json, for example this one:
                 <button class="slds-button slds-button_neutral" onclick="javascript:openInNewTab('/apex/NetworkTraffic');">Network Traffic</button>
                 <button class="slds-button slds-button_neutral" onclick="javascript:openInNewTab('/apex/BatchTraffic');">Batch Traffic</button>
                 <button class="slds-button slds-button_neutral" onclick="javascript:openInNewTab('/apex/CongaTraffic');">Conga Traffic</button>
+                <button class="slds-button slds-button_neutral" onclick="javascript:openInNewTab('/apex/AddPermissionSetToPublicGroup');">Permission Set Management</button>
             </div>
             </div>
         </fieldset>

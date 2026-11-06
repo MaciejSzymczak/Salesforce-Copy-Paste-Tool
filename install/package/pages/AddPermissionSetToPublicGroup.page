@@ -1,0 +1,1204 @@
+<apex:page lightningstylesheets="true">
+
+<apex:slds />
+
+
+<!--
+     Add PermissionSet to Public Group: assigns a permission set to every user directly assigned to public groups
+     OR having the profiles OR the roles OR selected by name
+     (users who already have it are skipped); tab "Reversal": deletes the assignments the current user made (today, last 3 days, ...);
+     AJAX toolkit only, no Apex
+
+     @author Maciej Szymczak, All rights reserved
+     @version 2026.11
+-->
+
+<script src="../../soap/ajax/64.0/connection.js"></script>
+
+<style>
+    body { margin-left: 1cm !important; }
+    /* the list of values of a multi value picklist (public group, profile, role) */
+    .multiDropdown { display: none; position: absolute; z-index: 1000; top: 100%; left: 0; min-width: 400px;
+        max-height: 300px; overflow-y: auto; background: #fff; border: 1px solid #d8dde6; border-radius: 4px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.2); }
+</style>
+
+    <script>
+        sforce.connection.sessionId = "{!$Api.Session_ID}";
+
+        function closePage() {
+          //this page is typically opened embedded in a Lightning Experience iframe; navigating
+          //window.location (the iframe) to the my.salesforce.com home page gets blocked by that
+          //domain's X-Frame-Options ("refused to connect"), so navigate the top-level tab instead.
+          window.top.location.href = '/home/home.jsp';
+        }
+
+        function escapeHtml(s) {
+            return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        // a value inside a SOQL string literal
+        function soqlString(s) {
+            return "'" + String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'";
+        }
+
+        // "contains" pattern for SOQL LIKE: % and _ typed by the user are plain characters
+        function soqlContains(s) {
+            return "'%" + String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/%/g, '\\%').replace(/_/g, '\\_') + "%'";
+        }
+
+        // a record Id (15 or 18 characters) with the given key prefix?
+        function isId(s, prefix) {
+            return /^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$/.test(s) && s.substring(0, 3) === prefix;
+        }
+
+        // all records of a query (queryMore until done)
+        function queryAllRecords(soql) {
+            var records = [];
+            var result = sforce.connection.query(soql);
+            while (true) {
+                records = records.concat(result.getArray("records"));
+                if (result.getBoolean("done")) break;
+                result = sforce.connection.queryMore(result.queryLocator);
+            }
+            return records;
+        }
+
+        // the records of "<soql> IN (<ids>)", the ids in chunks of 200
+        function queryByIds(soqlBeforeIds, ids, soqlAfterIds) {
+            var records = [];
+            for (var i = 0; i < ids.length; i += 200) {
+                records = records.concat(queryAllRecords(soqlBeforeIds + "('" + ids.slice(i, i + 200).join("','") + "')" + (soqlAfterIds || '')));
+            }
+            return records;
+        }
+
+        // exactly one record of a query, otherwise an error with the given name
+        function single(records, what, value) {
+            if (records.length === 0) throw new Error(what + ' "' + value + '" not found.');
+            if (records.length > 1) throw new Error(what + ' "' + value + '" is not unique (' + records.length + ' found), use the Id.');
+            return records[0];
+        }
+
+        //  ******************************************
+        //  ************ Lists of values (searchable: type any part of the label or the API name)
+        //  ******************************************
+        function loadLists() {
+            try {
+                for (var key in MULTI) {
+                    var config = MULTI[key];
+                    if (config.minChars) continue;  // loaded while typing, see searchList
+                    config.all = queryAllRecords("SELECT " + config.valueField + (config.valueField === config.labelField ? '' : ', ' + config.labelField)
+                        + " FROM " + config.object + config.where + " ORDER BY " + config.labelField).map(function(x) {
+                        return { value: x[config.valueField], label: x[config.labelField] };
+                    });
+                }
+                updateButtons();
+            }
+            catch(err)
+            {
+                var errText = (err && err.faultcode ? err.faultcode + ' ' + err.faultstring : (err && err.message ? err.message : String(err)));
+                if (errText.indexOf('API_CURRENTLY_DISABLED') >= 0 || errText.indexOf('API_DISABLED_FOR_ORG') >= 0) {
+                    showMessage('API access is missing. Add the permission set "Copy Paste Tool Admin" (API Enabled) to your user to make it work.', 'error');
+                } else {
+                    showMessage(escapeHtml(errText), 'error');
+                }
+            }
+        }
+
+        //  ******************************************
+        //  ************ Public groups, profiles, roles, users, permission sets (multi value): type part of the name, tick the values
+        //  ************ in the list; the selected values are shown as pills. Element ids: <key>Name, <key>Box, <key>Dropdown, <key>Pills
+        //  ******************************************
+        // object/where: the list of values; valueField: the value (API name); labelField: the label; idPrefix: a typed Id;
+        // nameFields: the fields a typed value is looked up by; all: {value, label}; selected: values;
+        // minChars: the list is not loaded up front but searched from this many typed characters (labels: value -> label)
+        var LIST_LIMIT = 200;
+        var MULTI = {
+            group:   { what: 'Public group', object: 'Group', where: " WHERE Type = 'Regular'", valueField: 'DeveloperName', labelField: 'Name',
+                       idPrefix: '00G', nameFields: ['Name', 'DeveloperName'], all: [], selected: [] },
+            profile: { what: 'Profile', object: 'Profile', where: '', valueField: 'Name', labelField: 'Name',
+                       idPrefix: '00e', nameFields: ['Name'], all: [], selected: [] },
+            role:    { what: 'Role', object: 'UserRole', where: '', valueField: 'DeveloperName', labelField: 'Name',
+                       idPrefix: '00E', nameFields: ['Name', 'DeveloperName'], all: [], selected: [] },
+            user:    { what: 'User', object: 'User', where: ' WHERE IsActive = true', valueField: 'Username', labelField: 'Name',
+                       idPrefix: '005', nameFields: ['Name', 'Username'], all: [], selected: [], minChars: 3, labels: {} },
+            // permission sets of permission set groups cannot be assigned: left out
+            permissionSet: { what: 'Permission set', object: 'PermissionSet', where: ' WHERE IsOwnedByProfile = false AND PermissionSetGroupId = null',
+                       valueField: 'Name', labelField: 'Label', idPrefix: '0PS', nameFields: ['Name', 'Label'], all: [], selected: [] }
+        };
+
+        // the list of the values matching the typed text (any part of the label or the API name), with checkboxes
+        function showList(key) {
+            if (MULTI[key].minChars) searchList(key);
+            else renderList(key);
+        }
+
+        function listMessage(key, text) {
+            var list = document.getElementById(key + 'Dropdown');
+            list.innerHTML = '<div style="padding: 2px 6px; color: #706e6b;">' + escapeHtml(text) + '</div>';
+            list.style.display = 'block';
+        }
+
+        // a list too large to load up front: searched on the server (a short pause after typing, an older answer is ignored)
+        function searchList(key) {
+            var config = MULTI[key];
+            var text = document.getElementById(key + 'Name').value.trim();
+            cancelSearch(config);
+            if (text.length < config.minChars) {
+                listMessage(key, 'Type at least ' + config.minChars + ' letters.');
+                return;
+            }
+            if (text.toLowerCase() === config.loadedText) {
+                renderList(key);
+                return;
+            }
+            listMessage(key, 'Searching...');
+            var requestNo = config.requestNo;
+            config.timer = setTimeout(function() {
+                sforce.connection.query("SELECT " + config.valueField + ", " + config.labelField + " FROM " + config.object + config.where
+                    + " AND (" + config.nameFields.map(function(f) { return f + " LIKE " + soqlContains(text); }).join(' OR ') + ")"
+                    + " ORDER BY " + config.labelField + " LIMIT " + (LIST_LIMIT + 1), {
+                    onSuccess: function(result) {
+                        if (requestNo !== config.requestNo) return;
+                        var records = result.getArray("records");
+                        config.truncated = records.length > LIST_LIMIT;
+                        config.all = records.slice(0, LIST_LIMIT).map(function(x) {
+                            config.labels[x[config.valueField]] = x[config.labelField];
+                            return { value: x[config.valueField], label: x[config.labelField] };
+                        });
+                        config.loadedText = text.toLowerCase();
+                        renderList(key);
+                    },
+                    onFailure: function(err) {
+                        if (requestNo !== config.requestNo) return;
+                        listMessage(key, err && err.faultstring ? err.faultstring : String(err));
+                    }
+                });
+            }, 300);
+        }
+
+        function cancelSearch(config) {
+            clearTimeout(config.timer);
+            config.requestNo = (config.requestNo || 0) + 1;
+        }
+
+        function renderList(key) {
+            var config = MULTI[key];
+            var text = document.getElementById(key + 'Name').value.trim().toLowerCase();
+            var items = '', count = 0;
+            for (var i = 0; i < config.all.length; i++) {
+                var v = config.all[i];
+                // a searched list already holds the matching values only
+                if (!config.minChars && text && v.label.toLowerCase().indexOf(text) < 0 && v.value.toLowerCase().indexOf(text) < 0) continue;
+                count++;
+                items = items + '<label style="display: block; padding: 2px 6px; cursor: pointer; white-space: nowrap;">'
+                    + '<input type="checkbox" value="' + escapeHtml(v.value) + '"'
+                    + (config.selected.indexOf(v.value) >= 0 ? ' checked="checked"' : '')
+                    + ' onchange="toggleValue(\'' + key + '\', this.value, this.checked);"/> '
+                    + escapeHtml(v.label)
+                    + (v.value !== v.label ? ' <span style="color: #706e6b;">(' + escapeHtml(v.value) + ')</span>' : '') + '</label>';
+            }
+            var list = document.getElementById(key + 'Dropdown');
+            list.innerHTML = (count ? items : '<div style="padding: 2px 6px; color: #706e6b;">No matching value.</div>')
+                + (config.minChars && config.truncated ? '<div style="padding: 2px 6px; color: #706e6b;">First ' + LIST_LIMIT + ' shown, type more letters.</div>' : '');
+            list.style.display = 'block';
+        }
+
+        function hideList(key) {
+            cancelSearch(MULTI[key]);
+            document.getElementById(key + 'Dropdown').style.display = 'none';
+        }
+
+        // a click outside the field and its list closes the list
+        document.addEventListener('mousedown', function(event) {
+            for (var key in MULTI) {
+                var box = document.getElementById(key + 'Box');
+                if (box && !box.contains(event.target)) hideList(key);
+            }
+        });
+
+        function toggleValue(key, value, checked) {
+            var selected = MULTI[key].selected;
+            var index = selected.indexOf(value);
+            if (checked && index < 0) selected.push(value);
+            if (!checked && index >= 0) selected.splice(index, 1);
+            renderPills(key);
+        }
+
+        // Enter: the typed text (a label, API name or Id not ticked in the list) is added as it is
+        function addValue(key) {
+            var input = document.getElementById(key + 'Name');
+            var value = input.value.trim();
+            if (value && MULTI[key].selected.indexOf(value) < 0) MULTI[key].selected.push(value);
+            input.value = '';
+            hideList(key);
+            renderPills(key);
+        }
+
+        function removeValue(key, index) {
+            MULTI[key].selected.splice(index, 1);
+            renderPills(key);
+            if (document.getElementById(key + 'Dropdown').style.display === 'block') showList(key);
+        }
+
+        // label of a value of the list (for the pill), or the value itself
+        function valueLabel(key, value) {
+            var labels = MULTI[key].labels;
+            if (labels && labels[value]) return labels[value] + ' (' + value + ')';
+            var all = MULTI[key].all;
+            for (var i = 0; i < all.length; i++) {
+                if (all[i].value === value) return all[i].label + (all[i].label !== value ? ' (' + value + ')' : '');
+            }
+            return value;
+        }
+
+        function renderPills(key) {
+            var selected = MULTI[key].selected;
+            var pills = '';
+            for (var i = 0; i < selected.length; i++) {
+                pills = pills + '<span class="slds-pill" style="margin: 2px;"><span class="slds-pill__label">'
+                    + escapeHtml(valueLabel(key, selected[i])) + '</span>'
+                    + '<button class="slds-button slds-button_icon slds-pill__remove" title="Remove" onclick="javascript:removeValue(\'' + key + '\', ' + i + ');"'
+                    + ' style="padding: 0 4px;">x</button></span>';
+            }
+            document.getElementById(key + 'Pills').innerHTML = pills;
+            if (key === 'permissionSet') updateButtons();
+        }
+
+        // the records of the selected values (by Id, API name or label); exactly one record per value
+        function resolveSelected(key) {
+            var config = MULTI[key];
+            var records = [];
+            for (var i = 0; i < config.selected.length; i++) {
+                var value = config.selected[i];
+                var where = isId(value, config.idPrefix) ? "Id = " + soqlString(value)
+                    : '(' + config.nameFields.map(function(f) { return f + ' = ' + soqlString(value); }).join(' OR ') + ')';
+                records.push(single(queryAllRecords("SELECT Id, Name" + (config.labelField !== 'Name' ? ', ' + config.labelField : '')
+                    + " FROM " + config.object
+                    + (config.where ? config.where + ' AND ' : ' WHERE ') + where), config.what, value));
+            }
+            return records;
+        }
+
+        // the message below the description: plain text (theme is not shown)
+        function showMessage(html, theme) {
+            document.getElementById('divSummary').innerHTML = html;
+        }
+
+        //  ******************************************
+        //  ************ Add / Delete Permission Set: 1. the users in scope are shown on the confirmation screen,
+        //  ************ 2. "Proceed" creates/deletes the assignments and shows the summary
+        //  ******************************************
+        var ACTIONS = {
+            add:    { verb: 'Add', title: 'to', working: 'Adding...', willDo: 'Will be assigned', skip: 'Already assigned',
+                      buttonClass: 'slds-button_brand' },
+            delete: { verb: 'Delete', title: 'from', working: 'Deleting...', willDo: 'Will be removed', skip: 'Not assigned',
+                      buttonClass: 'slds-button_destructive' }
+        };
+        var pending = null;  // the prepared action: {action, title, counts, users, rows, toProcess}
+
+        // the buttons are shown only when a permission set is selected
+        function updateButtons() {
+            document.getElementById('actionButtons').style.display = MULTI.permissionSet.selected.length ? '' : 'none';
+        }
+
+        function setButtonsDisabled(disabled) {
+            document.getElementById('addPsButton').disabled = disabled;
+            document.getElementById('deletePsButton').disabled = disabled;
+            document.getElementById('summaryPsButton').disabled = disabled;
+        }
+
+        // the queries are synchronous - let the browser paint the message first
+        function startAction(action) {
+            setButtonsDisabled(true);
+            showMessage('Loading the users in scope...');
+            setTimeout(function() {
+                try { prepare(action); }
+                finally { setButtonsDisabled(false); }
+            }, 10);
+        }
+
+        function apiError(err) {
+            // the AJAX toolkit needs the "API Enabled" user permission
+            var errText = (err && err.faultcode ? err.faultcode + ' ' + err.faultstring : (err && err.message ? err.message : String(err)));
+            if (errText.indexOf('API_CURRENTLY_DISABLED') >= 0 || errText.indexOf('API_DISABLED_FOR_ORG') >= 0) {
+                showMessage('API access is missing. Add the permission set "Copy Paste Tool Admin" (API Enabled) to your user to make it work.', 'error');
+            } else {
+                showMessage(escapeHtml(errText), 'error');
+            }
+        }
+
+        // a public group, profile, role or user is selected?
+        function scopeSelected() {
+            return !!(MULTI.group.selected.length || MULTI.profile.selected.length || MULTI.role.selected.length || MULTI.user.selected.length);
+        }
+
+        // Users: directly assigned to the public groups OR active users with the profiles
+        // OR active users with the roles OR the selected users (a user found more than once counts once)
+        function usersInScope() {
+            // by Id, Name (API name) or label
+            var scope = { groups: resolveSelected('group'), profiles: resolveSelected('profile'), roles: resolveSelected('role'),
+                          selectedUsers: resolveSelected('user'), userIds: [] };
+            var seenUser = {};
+            scope.addUser = function(userId) {
+                if (String(userId).substring(0, 3) === '005' && !seenUser[userId]) {
+                    seenUser[userId] = true;
+                    scope.userIds.push(userId);
+                }
+            };
+            var ids = function(records) { return records.map(function(x) { return x.Id; }); };
+            // users only (005...), not nested groups/roles
+            var members = queryByIds("SELECT UserOrGroupId FROM GroupMember WHERE GroupId IN ", ids(scope.groups));
+            for (var i = 0; i < members.length; i++) scope.addUser(members[i].UserOrGroupId);
+            scope.groupUsers = scope.userIds.length;
+            scope.profileUsers = queryByIds("SELECT Id FROM User WHERE IsActive = true AND ProfileId IN ", ids(scope.profiles));
+            for (var p = 0; p < scope.profileUsers.length; p++) scope.addUser(scope.profileUsers[p].Id);
+            scope.roleUsers = queryByIds("SELECT Id FROM User WHERE IsActive = true AND UserRoleId IN ", ids(scope.roles));
+            for (var q = 0; q < scope.roleUsers.length; q++) scope.addUser(scope.roleUsers[q].Id);
+            for (var t = 0; t < scope.selectedUsers.length; t++) scope.addUser(scope.selectedUsers[t].Id);
+            return scope;
+        }
+
+        // "public group(s) X (00G...) OR profile(s) Y (00e...)"
+        function scopeText(scope) {
+            return [['public group(s)', scope.groups], ['profile(s)', scope.profiles], ['role(s)', scope.roles], ['user(s)', scope.selectedUsers]]
+                .filter(function(x) { return x[1].length; })
+                .map(function(x) {
+                    return x[0] + ' ' + x[1].map(function(r) { return '<b>' + escapeHtml(r.Name) + '</b> (' + r.Id + ')'; }).join(', ');
+                }).join(' OR ');
+        }
+
+        function prepare(action) {
+            try {
+                if (!MULTI.permissionSet.selected.length) {
+                    showMessage('Select a Permission Set Name.', 'warning');
+                    return;
+                }
+                // no public group, profile, role or user selected: all active users
+                var allUsers = !scopeSelected();
+
+                //  ******************************************
+                //  ************ Public groups, profiles, roles, users and permission sets
+                //  ******************************************
+                var scope = usersInScope();
+                var groups = scope.groups, profiles = scope.profiles, roles = scope.roles, selectedUsers = scope.selectedUsers;
+                var permissionSets = resolveSelected('permissionSet');
+                var userIds = scope.userIds, addUser = scope.addUser;
+                var groupUsers = scope.groupUsers, profileUsers = scope.profileUsers, roleUsers = scope.roleUsers;
+                var ids = function(records) { return records.map(function(x) { return x.Id; }); };
+                // standard users only (no guest, automated process, integration users)
+                var activeUsers = allUsers ? queryAllRecords("SELECT Id FROM User WHERE IsActive = true AND UserType = 'Standard'") : [];
+                for (var a = 0; a < activeUsers.length; a++) addUser(activeUsers[a].Id);
+
+                //  ******************************************
+                //  ************ Users who have the permission sets (assignment Id per user and permission set)
+                //  ******************************************
+                var existing = {};  // user Id + '|' + permission set Id -> assignment Id
+                var assignments = queryByIds("SELECT Id, AssigneeId, PermissionSetId FROM PermissionSetAssignment WHERE PermissionSetId IN ('"
+                    + ids(permissionSets).join("','") + "') AND AssigneeId IN ", userIds);
+                for (var j = 0; j < assignments.length; j++) {
+                    existing[assignments[j].AssigneeId + '|' + assignments[j].PermissionSetId] = assignments[j].Id;
+                }
+
+                //  ******************************************
+                //  ************ Users in scope x permission sets (for the confirmation screen), sorted by permission set and name
+                //  ******************************************
+                var users = queryByIds("SELECT Id, Name, Username, Profile.Name, UserRole.Name, IsActive FROM User WHERE Id IN ", userIds)
+                    .sort(function(a, b) { return String(a.Name).localeCompare(String(b.Name)); });
+                var rows = [];
+                for (var s = 0; s < permissionSets.length; s++) {
+                    for (var u = 0; u < users.length; u++) {
+                        rows.push({
+                            id: users[u].Id,
+                            name: users[u].Name,
+                            username: users[u].Username,
+                            profile: users[u].Profile ? users[u].Profile.Name : '',
+                            role: users[u].UserRole ? users[u].UserRole.Name : '',
+                            active: users[u].IsActive === 'true',
+                            permissionSetId: permissionSets[s].Id,
+                            permissionSet: permissionSets[s].Label,
+                            assignmentId: existing[users[u].Id + '|' + permissionSets[s].Id] || null
+                        });
+                    }
+                }
+
+                // add: the users without the permission set; delete: the assignments of the users with it
+                var toProcess = rows.filter(function(r) { return action === 'add' ? !r.assignmentId : !!r.assignmentId; });
+
+                var title = 'Permission set(s) ' + permissionSets.map(function(x) {
+                        return '<b>' + escapeHtml(x.Label) + '</b> (' + escapeHtml(x.Name) + ', ' + x.Id + ')';
+                    }).join(', ')
+                    + ' ' + ACTIONS[action].title + (allUsers ? ' <b>ALL ACTIVE STANDARD USERS</b> (no public group, profile, role or user selected)'
+                        : ' the users of: ' + scopeText(scope));
+
+                pending = {
+                    action: action,
+                    title: title,
+                    counts: [
+                        groups.length ? ['Users of the public groups', groupUsers] : null,
+                        profiles.length ? ['Active users of the profiles', profileUsers.length] : null,
+                        roles.length ? ['Active users of the roles', roleUsers.length] : null,
+                        selectedUsers.length ? ['Selected users', selectedUsers.length] : null,
+                        allUsers ? ['All active standard users', activeUsers.length] : null,
+                        ['Total users in scope', users.length],
+                        ['Permission sets', permissionSets.length],
+                        ['Users x permission sets', rows.length],
+                        [action === 'add' ? 'Already assigned' : 'Not assigned', rows.length - toProcess.length],
+                        [action === 'add' ? 'New assignments' : 'Assignments to delete', toProcess.length]
+                    ].filter(function(x) { return x; }),
+                    rows: rows,
+                    toProcess: toProcess
+                };
+                showMessage('');
+                showConfirm();
+            }
+            catch(err)
+            {
+                apiError(err);
+            }
+        }
+
+        function countsTable(counts) {
+            var table = '<table class="slds-table slds-table_cell-buffer slds-table_bordered" style="width: auto;">';
+            for (var i = 0; i < counts.length; i++) {
+                table = table + '<tr><td>' + escapeHtml(counts[i][0]) + '</td><td>' + counts[i][1] + '</td></tr>';
+            }
+            return table + '</table>';
+        }
+
+        //  ******************************************
+        //  ************ Confirmation screen: all users in scope, "Proceed" / "Cancel"
+        //  ******************************************
+        function showConfirm() {
+            var config = ACTIONS[pending.action];
+            var html = '<h2 class="slds-text-heading_medium" style="margin-bottom: 8px;">' + config.verb + ' Permission Set: confirmation</h2>'
+                + '<div style="margin-bottom: 8px;">' + pending.title + '</div>'
+                + countsTable(pending.counts) + '<br/>';
+            if (pending.rows.length) {
+                html = html + '<table class="slds-table slds-table_cell-buffer slds-table_bordered"><thead><tr>'
+                    + '<th>No</th><th>Permission Set</th><th>User Name</th><th>Username</th><th>Profile Name</th><th>Role Name</th><th>Active</th><th>Action</th>'
+                    + '</tr></thead><tbody>';
+                for (var i = 0; i < pending.rows.length; i++) {
+                    var r = pending.rows[i];
+                    var willDo = pending.action === 'add' ? !r.assignmentId : !!r.assignmentId;
+                    html = html + '<tr>'
+                        + '<td>' + (i + 1) + '</td>'
+                        + '<td>' + escapeHtml(r.permissionSet) + '</td>'
+                        + '<td><a href="/' + escapeHtml(r.id) + '" target="_blank">' + escapeHtml(r.name) + '</a></td>'
+                        + '<td>' + escapeHtml(r.username) + '</td>'
+                        + '<td>' + escapeHtml(r.profile) + '</td>'
+                        + '<td>' + escapeHtml(r.role) + '</td>'
+                        + '<td>' + (r.active ? 'Yes' : 'No') + '</td>'
+                        + (willDo
+                            ? '<td style="font-weight: bold; color: ' + (pending.action === 'add' ? '#2e844a' : '#ba0517') + ';">' + config.willDo + '</td>'
+                            : '<td style="color: #706e6b;">' + config.skip + '</td>')
+                        + '</tr>';
+                }
+                html = html + '</tbody></table>';
+            } else {
+                html = html + 'No users found.';
+            }
+            document.getElementById('confirmBody').innerHTML = html;
+            var proceed = document.getElementById('proceedButton');
+            proceed.className = 'slds-button ' + config.buttonClass;
+            proceed.disabled = pending.toProcess.length === 0;
+            proceed.title = pending.toProcess.length === 0 ? 'Nothing to ' + config.verb.toLowerCase() : '';
+            document.getElementById('downloadButton').disabled = pending.rows.length === 0;
+            document.getElementById('confirmModal').style.display = 'block';
+        }
+
+        //  ******************************************
+        //  ************ Download of the confirmation screen (csv)
+        //  ******************************************
+        function csvCell(value) {
+            var text = String(value === null || value === undefined ? '' : value);
+            // Excel must not run a name as a formula
+            if (/^[=+\-@]/.test(text)) text = "'" + text;
+            return '"' + text.replace(/"/g, '""') + '"';
+        }
+
+        function downloadRows() {
+            if (!pending || !pending.rows.length) return;
+            var config = ACTIONS[pending.action];
+            var lines = [['No', 'Permission Set', 'Permission Set Id', 'User Id', 'User Name', 'Username', 'Profile Name', 'Role Name', 'Active', 'Action', 'Assignment Id'].map(csvCell).join(',')];
+            for (var i = 0; i < pending.rows.length; i++) {
+                var r = pending.rows[i];
+                var willDo = pending.action === 'add' ? !r.assignmentId : !!r.assignmentId;
+                lines.push([i + 1, r.permissionSet, r.permissionSetId, r.id, r.name, r.username, r.profile, r.role, r.active ? 'Yes' : 'No',
+                    willDo ? config.willDo : config.skip, r.assignmentId].map(csvCell).join(','));
+            }
+            // the byte order mark lets Excel read the file as UTF-8
+            var blob = new Blob(['\uFEFF' + lines.join('\r\n') + '\r\n'], { type: 'text/csv;charset=utf-8' });
+            var link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = 'PermissionSet_' + config.verb + '_' + new Date().toISOString().replace(/[-:T]/g, '').substring(0, 14) + '.csv';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            setTimeout(function() { URL.revokeObjectURL(link.href); }, 60000);
+        }
+
+        function cancelConfirm() {
+            document.getElementById('confirmModal').style.display = 'none';
+            if (pending) showMessage(pending.title + '<br/>Cancelled, nothing changed.', 'warning');
+            pending = null;
+        }
+
+        function proceed() {
+            if (!pending || !pending.toProcess.length) return;
+            document.getElementById('confirmModal').style.display = 'none';
+            setButtonsDisabled(true);
+            showMessage(ACTIONS[pending.action].working);
+            setTimeout(function() {
+                try { execute(); }
+                catch(err) { apiError(err); }
+                finally { setButtonsDisabled(false); pending = null; }
+            }, 10);
+        }
+
+        //  ******************************************
+        //  ************ Create / delete the assignments (200 per call; a failed one does not stop the others)
+        //  ******************************************
+        function execute() {
+            var action = pending.action;
+            var rows = pending.toProcess;
+            var successCount = 0, errors = [];
+            for (var m = 0; m < rows.length; m += 200) {
+                var chunk = rows.slice(m, m + 200);
+                var results;
+                if (action === 'add') {
+                    var newAssignments = [];
+                    for (var n = 0; n < chunk.length; n++) {
+                        var psa = new sforce.SObject('PermissionSetAssignment');
+                        psa.AssigneeId = chunk[n].id;
+                        psa.PermissionSetId = chunk[n].permissionSetId;
+                        newAssignments.push(psa);
+                    }
+                    results = sforce.connection.create(newAssignments);
+                } else {
+                    results = sforce.connection.deleteIds(chunk.map(function(x) { return x.assignmentId; }));
+                }
+                for (var r = 0; r < results.length; r++) {
+                    if (results[r].getBoolean('success')) {
+                        successCount++;
+                    } else {
+                        var errs = [].concat(results[r].errors || []);
+                        var messages = [];
+                        for (var e = 0; e < errs.length; e++) messages.push(errs[e].message);
+                        errors.push({ row: chunk[r], message: messages.join(' ') });
+                    }
+                }
+            }
+
+            //  ******************************************
+            //  ************ Summary
+            //  ******************************************
+            var counts = pending.counts.concat([
+                [action === 'add' ? 'Successfully assigned' : 'Successfully deleted', successCount],
+                [action === 'add' ? 'Failed assignments' : 'Failed deletions', errors.length]
+            ]);
+            var summary = pending.title + '<br/><br/>' + countsTable(counts);
+            if (errors.length > 0) {
+                summary = summary + '<br/><b>Errors</b>'
+                    + '<table class="slds-table slds-table_cell-buffer slds-table_bordered"><thead><tr><th>Permission Set</th><th>User</th><th>Error</th></tr></thead><tbody>';
+                for (var x = 0; x < errors.length; x++) {
+                    var row = errors[x].row;
+                    summary = summary + '<tr><td>' + escapeHtml(row.permissionSet) + '</td><td><a href="/' + escapeHtml(row.id) + '" target="_blank">'
+                        + escapeHtml(row.name + (row.active ? '' : ' (inactive)')) + '</a></td>'
+                        + '<td style="color: red;">' + escapeHtml(errors[x].message) + '</td></tr>';
+                }
+                summary = summary + '</tbody></table>';
+            }
+            showMessage(summary);
+        }
+
+        //  ******************************************
+        //  ************ Permission Set Summary: users (rows) x the permission sets assigned to them (columns), Yes/No
+        //  ******************************************
+        var matrix = null;  // {users, columns: [{key, label}], assigned: {user Id + '|' + column key: true}}
+
+        function startSummary() {
+            if (!scopeSelected()) {
+                showMessage('Select a Public Group Name, Profile Name, Role Name or User Name.');
+                return;
+            }
+            setButtonsDisabled(true);
+            showMessage('Loading the permission sets of the users...');
+            setTimeout(function() {
+                try { prepareSummary(); }
+                catch(err) { apiError(err); }
+                finally { setButtonsDisabled(false); }
+            }, 10);
+        }
+
+        function prepareSummary() {
+            var scope = usersInScope();
+            var users = queryByIds("SELECT Id, Name, Username, Profile.Name, UserRole.Name, IsActive FROM User WHERE Id IN ", scope.userIds)
+                .sort(function(a, b) { return String(a.Name).localeCompare(String(b.Name)); });
+            // permission sets selected: only these (also when nobody has them), otherwise all assigned to the users
+            var permissionSets = resolveSelected('permissionSet');
+            var assignments = queryByIds("SELECT AssigneeId, PermissionSetId, PermissionSet.Name, PermissionSet.Label, PermissionSetGroup.MasterLabel"
+                + " FROM PermissionSetAssignment WHERE PermissionSet.IsOwnedByProfile = false"
+                + (permissionSets.length ? " AND PermissionSetId IN ('" + permissionSets.map(function(x) { return x.Id; }).join("','") + "')" : '')
+                + " AND AssigneeId IN ", scope.userIds);
+            var columns = [], seenColumn = {}, assigned = {};
+            for (var s = 0; s < permissionSets.length; s++) {
+                seenColumn[permissionSets[s].Id] = true;
+                columns.push({ key: permissionSets[s].Id, label: permissionSets[s].Label });
+            }
+            for (var i = 0; i < assignments.length; i++) {
+                var a = assignments[i];
+                if (!seenColumn[a.PermissionSetId]) {
+                    seenColumn[a.PermissionSetId] = true;
+                    columns.push({ key: a.PermissionSetId,
+                        label: a.PermissionSetGroup ? a.PermissionSetGroup.MasterLabel + ' (group)' : a.PermissionSet.Label });
+                }
+                assigned[a.AssigneeId + '|' + a.PermissionSetId] = true;
+            }
+            columns.sort(function(x, y) { return String(x.label).localeCompare(String(y.label)); });
+            matrix = { users: users, columns: columns, assigned: assigned };
+
+            var html = '<h2 class="slds-text-heading_medium" style="margin-bottom: 8px;">Permission Set Summary</h2>'
+                + '<div style="margin-bottom: 8px;">The users of: ' + scopeText(scope)
+                + (permissionSets.length ? '<br/>Selected permission set(s): ' + permissionSets.map(function(x) { return '<b>' + escapeHtml(x.Label) + '</b>'; }).join(', ') : '')
+                + '</div>'
+                + countsTable([['Users', users.length], ['Permission sets', columns.length], ['Assignments', assignments.length]]) + '<br/>';
+            if (users.length) {
+                html = html + '<table class="slds-table slds-table_cell-buffer slds-table_bordered"><thead><tr>'
+                    + '<th>No</th><th>User Name</th><th>Username</th><th>Profile Name</th><th>Role Name</th><th>Active</th>';
+                for (var c = 0; c < columns.length; c++) html = html + '<th>' + escapeHtml(columns[c].label) + '</th>';
+                html = html + '</tr></thead><tbody>';
+                for (var u = 0; u < users.length; u++) {
+                    var user = users[u];
+                    html = html + '<tr><td>' + (u + 1) + '</td>'
+                        + '<td><a href="/' + escapeHtml(user.Id) + '" target="_blank">' + escapeHtml(user.Name) + '</a></td>'
+                        + '<td>' + escapeHtml(user.Username) + '</td>'
+                        + '<td>' + escapeHtml(user.Profile ? user.Profile.Name : '') + '</td>'
+                        + '<td>' + escapeHtml(user.UserRole ? user.UserRole.Name : '') + '</td>'
+                        + '<td>' + (user.IsActive === 'true' ? 'Yes' : 'No') + '</td>';
+                    for (var k = 0; k < columns.length; k++) {
+                        html = html + (assigned[user.Id + '|' + columns[k].key]
+                            ? '<td style="font-weight: bold; color: #2e844a;">Yes</td>'
+                            : '<td style="color: #706e6b;">No</td>');
+                    }
+                    html = html + '</tr>';
+                }
+                html = html + '</tbody></table>';
+            } else {
+                html = html + 'No users found.';
+            }
+            showMessage('');
+            document.getElementById('summaryBody').innerHTML = html;
+            document.getElementById('summaryDownloadButton').disabled = users.length === 0;
+            document.getElementById('summaryModal').style.display = 'block';
+        }
+
+        function closeSummary() {
+            document.getElementById('summaryModal').style.display = 'none';
+            matrix = null;
+        }
+
+        function downloadSummary() {
+            if (!matrix) return;
+            var rows = [['No', 'User Name', 'Username', 'Profile Name', 'Role Name', 'Active'].concat(matrix.columns.map(function(c) { return c.label; }))];
+            for (var u = 0; u < matrix.users.length; u++) {
+                var user = matrix.users[u];
+                var row = [u + 1, user.Name, user.Username, user.Profile ? user.Profile.Name : '', user.UserRole ? user.UserRole.Name : '',
+                    user.IsActive === 'true' ? 'Yes' : 'No'];
+                for (var c = 0; c < matrix.columns.length; c++) row.push(matrix.assigned[user.Id + '|' + matrix.columns[c].key] ? 'Yes' : 'No');
+                rows.push(row);
+            }
+            var blob = new Blob([xlsxBytes(rows)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+            var link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = 'PermissionSetSummary_' + new Date().toISOString().replace(/[-:T]/g, '').substring(0, 14) + '.xlsx';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            setTimeout(function() { URL.revokeObjectURL(link.href); }, 60000);
+        }
+
+        //  ******************************************
+        //  ************ Excel file (.xlsx: a zip of xml files, stored without compression; no library needed)
+        //  ******************************************
+        function xmlText(value) {
+            return String(value === null || value === undefined ? '' : value)
+                .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        // column number (0, 1, ...) -> A, B, ... Z, AA, ...
+        function xlsxColumn(n) {
+            var name = '';
+            for (n = n + 1; n > 0; n = Math.floor((n - 1) / 26)) name = String.fromCharCode(65 + (n - 1) % 26) + name;
+            return name;
+        }
+
+        // rows: arrays of values; the first row is the (bold, frozen) header
+        function xlsxBytes(rows) {
+            var declaration = '<' + '?xml version="1.0" encoding="UTF-8" standalone="yes"?' + '>\n';
+            var main = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+            var officeRel = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+            var sheet = '';
+            for (var r = 0; r < rows.length; r++) {
+                sheet = sheet + '<row r="' + (r + 1) + '">';
+                for (var c = 0; c < rows[r].length; c++) {
+                    sheet = sheet + '<c r="' + xlsxColumn(c) + (r + 1) + '" t="inlineStr"' + (r === 0 ? ' s="1"' : '')
+                        + '><is><t xml:space="preserve">' + xmlText(rows[r][c]) + '</t></is></c>';
+                }
+                sheet = sheet + '</row>';
+            }
+            return zipStored([
+                { name: '[Content_Types].xml', text: declaration + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                    + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                    + '<Default Extension="xml" ContentType="application/xml"/>'
+                    + '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+                    + '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                    + '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>' },
+                { name: '_rels/.rels', text: declaration + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                    + '<Relationship Id="rId1" Type="' + officeRel + '/officeDocument" Target="xl/workbook.xml"/></Relationships>' },
+                { name: 'xl/workbook.xml', text: declaration + '<workbook xmlns="' + main + '" xmlns:r="' + officeRel + '">'
+                    + '<sheets><sheet name="Permission Set Summary" sheetId="1" r:id="rId1"/></sheets></workbook>' },
+                { name: 'xl/_rels/workbook.xml.rels', text: declaration + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                    + '<Relationship Id="rId1" Type="' + officeRel + '/worksheet" Target="worksheets/sheet1.xml"/>'
+                    + '<Relationship Id="rId2" Type="' + officeRel + '/styles" Target="styles.xml"/></Relationships>' },
+                { name: 'xl/styles.xml', text: declaration + '<styleSheet xmlns="' + main + '">'
+                    + '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>'
+                    + '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>'
+                    + '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
+                    + '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+                    + '<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+                    + '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs></styleSheet>' },
+                { name: 'xl/worksheets/sheet1.xml', text: declaration + '<worksheet xmlns="' + main + '">'
+                    + '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>'
+                    + '<sheetFormatPr defaultRowHeight="15"/><cols><col min="1" max="' + rows[0].length + '" width="22" customWidth="1"/></cols>'
+                    + '<sheetData>' + sheet + '</sheetData></worksheet>' }
+            ]);
+        }
+
+        var CRC_TABLE = null;
+        function crc32(bytes) {
+            if (!CRC_TABLE) {
+                CRC_TABLE = [];
+                for (var n = 0; n < 256; n++) {
+                    var v = n;
+                    for (var k = 0; k < 8; k++) v = v & 1 ? 0xEDB88320 ^ (v >>> 1) : v >>> 1;
+                    CRC_TABLE[n] = v >>> 0;
+                }
+            }
+            var crc = 0xFFFFFFFF;
+            for (var i = 0; i < bytes.length; i++) crc = CRC_TABLE[(crc ^ bytes[i]) & 255] ^ (crc >>> 8);
+            return (crc ^ 0xFFFFFFFF) >>> 0;
+        }
+
+        // a zip file of {name, text} entries, stored (method 0)
+        function zipStored(files) {
+            var encoder = new TextEncoder(), parts = [], central = [], offset = 0;
+            var header = function(size) { return new DataView(new ArrayBuffer(size)); };
+            files.forEach(function(file) {
+                var name = encoder.encode(file.name), data = encoder.encode(file.text), crc = crc32(data);
+                var local = header(30);
+                local.setUint32(0, 0x04034B50, true);
+                local.setUint16(4, 20, true);
+                local.setUint16(6, 0x0800, true);  // names are UTF-8
+                local.setUint16(12, 0x21, true);   // date: 1980-01-01
+                local.setUint32(14, crc, true);
+                local.setUint32(18, data.length, true);
+                local.setUint32(22, data.length, true);
+                local.setUint16(26, name.length, true);
+                var entry = header(46);
+                entry.setUint32(0, 0x02014B50, true);
+                entry.setUint16(4, 20, true);
+                entry.setUint16(6, 20, true);
+                entry.setUint16(8, 0x0800, true);
+                entry.setUint16(14, 0x21, true);
+                entry.setUint32(16, crc, true);
+                entry.setUint32(20, data.length, true);
+                entry.setUint32(24, data.length, true);
+                entry.setUint16(28, name.length, true);
+                entry.setUint32(42, offset, true);
+                parts.push(new Uint8Array(local.buffer), name, data);
+                central.push(new Uint8Array(entry.buffer), name);
+                offset += 30 + name.length + data.length;
+            });
+            var centralSize = central.reduce(function(sum, part) { return sum + part.length; }, 0);
+            var end = header(22);
+            end.setUint32(0, 0x06054B50, true);
+            end.setUint16(8, files.length, true);
+            end.setUint16(10, files.length, true);
+            end.setUint32(12, centralSize, true);
+            end.setUint32(16, offset, true);
+            var all = parts.concat(central, [new Uint8Array(end.buffer)]);
+            var out = new Uint8Array(offset + centralSize + 22), position = 0;
+            all.forEach(function(part) { out.set(part, position); position += part.length; });
+            return out;
+        }
+
+        //  ******************************************
+        //  ************ Tabs ************************
+        //  ******************************************
+        var TABS = ['assignment', 'reversal'];
+        var reversalLoaded = false;
+
+        // shows the tab; the reversal list is loaded the first time its tab is shown
+        function showTab(key) {
+            for (var i = 0; i < TABS.length; i++) {
+                var active = (TABS[i] === key);
+                document.getElementById(TABS[i] + '_tabItem').className = 'slds-tabs_default__item' + (active ? ' slds-is-active' : '');
+                document.getElementById(TABS[i] + '_tabLink').setAttribute('aria-selected', active ? 'true' : 'false');
+                document.getElementById(TABS[i] + '_tab').className = 'slds-tabs_default__content ' + (active ? 'slds-show' : 'slds-hide');
+            }
+            if (key === 'reversal' && !reversalLoaded) refreshReversal();
+        }
+
+        //  ******************************************
+        //  ************ Reversal ********************
+        //  ******************************************
+        // PermissionSetAssignment has no CreatedBy/CreatedDate: the assignments made by the current user today
+        // are taken from the setup audit trail ("Permission set <label>: assigned to user <name> (UserID: [<id>])")
+        // and matched with the assignments that still exist
+        var CURRENT_USER_ID = "{!$User.Id}";
+        var AUDIT_ASSIGN = /^Permission set (.*): assigned to user .* \(UserID: \[([a-zA-Z0-9]{15,18})\]\)$/;
+        // period of the list (picklist value -> SOQL date literal; '' = any time, as far as the audit trail goes back)
+        var PERIODS = {
+            'today': 'TODAY',
+            'last 3 days': 'LAST_N_DAYS:3',
+            'last week': 'LAST_N_DAYS:7',
+            'last year': 'LAST_N_DAYS:365',
+            'any time': ''
+        };
+        var reversalRows = [];  // {id, userId, userName, profile, role, permissionSet, permissionSetCreated, assignedAt}
+
+        function dateTime(value) {
+            return value ? new Date(value).toLocaleString() : '';
+        }
+
+        function showReversalMessage(html, theme) {
+            document.getElementById('reversalMessage').innerHTML = theme
+                ? '<div class="slds-notify slds-notify_alert slds-theme_alert-texture slds-theme_' + theme + '" role="alert"><h2>' + html + '</h2></div>'
+                : html;
+        }
+
+        // the queries are synchronous - let the browser paint "Loading..." first
+        function refreshReversal(message, theme) {
+            reversalLoaded = true;
+            document.getElementById('reversalTable').innerHTML = 'Loading...';
+            document.getElementById('reversalCount').innerHTML = '';
+            showReversalMessage(message || '', theme);
+            setTimeout(loadReversal, 10);
+        }
+
+        function loadReversal() {
+            try {
+                // assignments made by the current user in the selected period (the latest first)
+                var period = PERIODS[document.getElementById('reversalPeriod').value];
+                var audit = queryAllRecords("SELECT CreatedDate, Display FROM SetupAuditTrail WHERE Action = 'PermSetAssign'"
+                    + " AND CreatedById = '" + CURRENT_USER_ID + "'" + (period ? " AND CreatedDate = " + period : '')
+                    + " ORDER BY CreatedDate DESC");
+                var assignedAt = {};  // user Id (15) + '|' + permission set label -> time of the latest assignment
+                var userIds = [], seenUser = {};
+                for (var i = 0; i < audit.length; i++) {
+                    var match = AUDIT_ASSIGN.exec(audit[i].Display || '');
+                    if (!match) continue;
+                    var userKey = match[2].substring(0, 15);
+                    var pairKey = userKey + '|' + match[1];
+                    if (!assignedAt[pairKey]) assignedAt[pairKey] = audit[i].CreatedDate;
+                    if (!seenUser[userKey]) { seenUser[userKey] = true; userIds.push(userKey); }
+                }
+
+                // the assignments of these users that still exist
+                var assignments = queryByIds("SELECT Id, AssigneeId, Assignee.Name, Assignee.Profile.Name, Assignee.UserRole.Name,"
+                    + " PermissionSet.Name, PermissionSet.Label, PermissionSet.CreatedDate FROM PermissionSetAssignment WHERE AssigneeId IN ", userIds,
+                    " AND PermissionSet.IsOwnedByProfile = false");
+                reversalRows = [];
+                for (var j = 0; j < assignments.length; j++) {
+                    var a = assignments[j];
+                    var when = assignedAt[String(a.AssigneeId).substring(0, 15) + '|' + a.PermissionSet.Label];
+                    if (!when) continue;
+                    reversalRows.push({
+                        id: a.Id,
+                        userId: a.AssigneeId,
+                        userName: a.Assignee ? a.Assignee.Name : '',
+                        profile: a.Assignee && a.Assignee.Profile ? a.Assignee.Profile.Name : '',
+                        role: a.Assignee && a.Assignee.UserRole ? a.Assignee.UserRole.Name : '',
+                        permissionSet: a.PermissionSet.Label + ' (' + a.PermissionSet.Name + ')',
+                        permissionSetCreated: a.PermissionSet.CreatedDate,
+                        assignedAt: when
+                    });
+                }
+                reversalRows.sort(function(x, y) {
+                    return String(y.assignedAt).localeCompare(String(x.assignedAt)) || x.userName.localeCompare(y.userName);
+                });
+                renderReversal();
+            }
+            catch(err)
+            {
+                document.getElementById('reversalTable').innerHTML = '';
+                var errText = (err && err.faultcode ? err.faultcode + ' ' + err.faultstring : (err && err.message ? err.message : String(err)));
+                if (errText.indexOf('API_CURRENTLY_DISABLED') >= 0 || errText.indexOf('API_DISABLED_FOR_ORG') >= 0) {
+                    showReversalMessage('API access is missing. Add the permission set "Copy Paste Tool Admin" (API Enabled) to your user to make it work.', 'error');
+                } else {
+                    showReversalMessage(escapeHtml(errText), 'error');
+                }
+            }
+        }
+
+        function renderReversal() {
+            if (!reversalRows.length) {
+                document.getElementById('reversalTable').innerHTML = 'No permission set assignments made by you ('
+                    + escapeHtml(document.getElementById('reversalPeriod').value) + ').';
+                document.getElementById('reversalCount').innerHTML = '';
+                return;
+            }
+            var table = '<table class="slds-table slds-table_cell-buffer slds-table_bordered"><thead><tr>'
+                + '<th style="width: 40px;"></th><th>No</th><th>Permission Set Name</th><th>User Name</th><th>Profile Name</th>'
+                + '<th>Role Name</th><th>Permission Set Created Date</th><th>Assignment Created Date</th></tr></thead><tbody>';
+            for (var i = 0; i < reversalRows.length; i++) {
+                var r = reversalRows[i];
+                table = table + '<tr>'
+                    + '<td><input type="checkbox" class="reversalCheck" value="' + escapeHtml(r.id) + '" onchange="updateReversalCount();"/></td>'
+                    + '<td>' + (i + 1) + '</td>'
+                    + '<td>' + escapeHtml(r.permissionSet) + '</td>'
+                    + '<td><a href="/' + escapeHtml(r.userId) + '" target="_blank">' + escapeHtml(r.userName) + '</a></td>'
+                    + '<td>' + escapeHtml(r.profile) + '</td>'
+                    + '<td>' + escapeHtml(r.role) + '</td>'
+                    + '<td>' + escapeHtml(dateTime(r.permissionSetCreated)) + '</td>'
+                    + '<td>' + escapeHtml(dateTime(r.assignedAt)) + '</td>'
+                    + '</tr>';
+            }
+            document.getElementById('reversalTable').innerHTML = table + '</tbody></table>';
+            updateReversalCount();
+        }
+
+        function reversalChecks() {
+            return document.getElementsByClassName('reversalCheck');
+        }
+
+        function selectedReversalIds() {
+            var ids = [], checks = reversalChecks();
+            for (var i = 0; i < checks.length; i++) {
+                if (checks[i].checked) ids.push(checks[i].value);
+            }
+            return ids;
+        }
+
+        function updateReversalCount() {
+            document.getElementById('reversalCount').innerHTML = reversalRows.length + ' assignments, '
+                + selectedReversalIds().length + ' selected';
+        }
+
+        function selectAllReversal(checked) {
+            var checks = reversalChecks();
+            for (var i = 0; i < checks.length; i++) checks[i].checked = checked;
+            updateReversalCount();
+        }
+
+        function deleteAssignments() {
+            var ids = selectedReversalIds();
+            if (!ids.length) { alert('Select the assignments to delete.'); return; }
+            if (!confirm('Delete ' + ids.length + ' permission set assignment(s)?')) return;
+            document.getElementById('deleteButton').disabled = true;
+            showReversalMessage('Deleting...');
+            setTimeout(function() {
+                try {
+                    var successCount = 0, errors = [];
+                    for (var i = 0; i < ids.length; i += 200) {
+                        var chunk = ids.slice(i, i + 200);
+                        var results = sforce.connection.deleteIds(chunk);
+                        for (var j = 0; j < results.length; j++) {
+                            if (results[j].getBoolean('success')) {
+                                successCount++;
+                            } else {
+                                var errs = [].concat(results[j].errors || []);
+                                var messages = [];
+                                for (var e = 0; e < errs.length; e++) messages.push(errs[e].message);
+                                errors.push(chunk[j] + ': ' + messages.join(' '));
+                            }
+                        }
+                    }
+                    var message = 'Deleted: ' + successCount + ', failed: ' + errors.length
+                        + (errors.length ? '<br/>' + errors.map(escapeHtml).join('<br/>') : '');
+                    refreshReversal(message, errors.length ? 'error' : 'success');
+                }
+                catch(err)
+                {
+                    showReversalMessage(escapeHtml(err && err.faultstring ? err.faultstring : (err && err.message ? err.message : String(err))), 'error');
+                }
+                finally {
+                    document.getElementById('deleteButton').disabled = false;
+                }
+            }, 10);
+        }
+
+</script>
+
+<body>
+
+<div class="slds-notify slds-notify_alert slds-theme_alert-texture slds-theme_info" role="alert" style="position:relative;">
+  <h2>ADD PERMISSION SET TO PUBLIC GROUP, PROFILES, ROLES OR USERS</h2>
+  <span style="position:absolute; right:8px; top:50%; transform:translateY(-50%);">
+      <button class="slds-button slds-button_neutral" onclick="javascript:closePage();">Close</button>
+  </span>
+</div>
+
+<div class="slds-tabs_default">
+  <ul class="slds-tabs_default__nav" role="tablist">
+    <li class="slds-tabs_default__item slds-is-active" role="presentation" id="assignment_tabItem">
+      <a class="slds-tabs_default__link" href="javascript:showTab('assignment');" role="tab" aria-selected="true"
+         aria-controls="assignment_tab" id="assignment_tabLink">Assignment</a>
+    </li>
+    <li class="slds-tabs_default__item" role="presentation" id="reversal_tabItem">
+      <a class="slds-tabs_default__link" href="javascript:showTab('reversal');" role="tab" aria-selected="false"
+         aria-controls="reversal_tab" id="reversal_tabLink">Reversal</a>
+    </li>
+  </ul>
+
+  <!-- ************ Tab 1: Assignment ************ -->
+  <div id="assignment_tab" class="slds-tabs_default__content slds-show" role="tabpanel" aria-labelledby="assignment_tabLink">
+<div class="slds-m-top_xx-small">
+
+   <table>
+   <tr>
+   <td style="vertical-align: top; width: 420px;">
+        <!-- the users: public groups OR profiles OR roles OR users (multi value picklists, see MULTI) -->
+        <div class="slds-form-element">
+          <label class="slds-form-element__label" for="groupName" style="font-weight: bold;">Public Group Name</label>
+          <div class="slds-form-element__control" id="groupBox" style="position: relative;">
+            <input type="text" id="groupName" class="slds-input" style="width: 400px;" placeholder="Type to search, tick to select"
+                   autocomplete="off" onfocus="showList('group');" oninput="showList('group');"
+                   onkeydown="if (event.key === 'Enter') addValue('group'); else if (event.key === 'Escape') hideList('group');"/>
+            <div id="groupDropdown" class="multiDropdown"></div>
+          </div>
+          <div id="groupPills"></div>
+        </div>
+        <div class="slds-form-element" style="margin-top: 8px;">
+          <label class="slds-form-element__label" for="profileName" style="font-weight: bold;">OR Profile Name</label>
+          <div class="slds-form-element__control" id="profileBox" style="position: relative;">
+            <input type="text" id="profileName" class="slds-input" style="width: 400px;" placeholder="Type to search, tick to select"
+                   autocomplete="off" onfocus="showList('profile');" oninput="showList('profile');"
+                   onkeydown="if (event.key === 'Enter') addValue('profile'); else if (event.key === 'Escape') hideList('profile');"/>
+            <div id="profileDropdown" class="multiDropdown"></div>
+          </div>
+          <div id="profilePills"></div>
+        </div>
+        <div class="slds-form-element" style="margin-top: 8px;">
+          <label class="slds-form-element__label" for="roleName" style="font-weight: bold;">OR Role Name</label>
+          <div class="slds-form-element__control" id="roleBox" style="position: relative;">
+            <input type="text" id="roleName" class="slds-input" style="width: 400px;" placeholder="Type to search, tick to select"
+                   autocomplete="off" onfocus="showList('role');" oninput="showList('role');"
+                   onkeydown="if (event.key === 'Enter') addValue('role'); else if (event.key === 'Escape') hideList('role');"/>
+            <div id="roleDropdown" class="multiDropdown"></div>
+          </div>
+          <div id="rolePills"></div>
+        </div>
+        <div class="slds-form-element" style="margin-top: 8px;">
+          <label class="slds-form-element__label" for="userName" style="font-weight: bold;">OR User Name</label>
+          <div class="slds-form-element__control" id="userBox" style="position: relative;">
+            <input type="text" id="userName" class="slds-input" style="width: 400px;" placeholder="Type at least 3 letters, tick to select"
+                   autocomplete="off" onfocus="showList('user');" oninput="showList('user');"
+                   onkeydown="if (event.key === 'Enter') addValue('user'); else if (event.key === 'Escape') hideList('user');"/>
+            <div id="userDropdown" class="multiDropdown"></div>
+          </div>
+          <div id="userPills"></div>
+        </div>
+   </td>
+   <td>&nbsp;
+   </td>
+   <td style="vertical-align: top; width: 420px;">
+        <div class="slds-form-element">
+          <label class="slds-form-element__label" for="permissionSetName" style="font-weight: bold;">Permission Set Name</label>
+          <div class="slds-form-element__control" id="permissionSetBox" style="position: relative;">
+            <input type="text" id="permissionSetName" class="slds-input" style="width: 400px;" placeholder="Type to search, tick to select"
+                   autocomplete="off" onfocus="showList('permissionSet');" oninput="showList('permissionSet');"
+                   onkeydown="if (event.key === 'Enter') addValue('permissionSet'); else if (event.key === 'Escape') hideList('permissionSet');"/>
+            <div id="permissionSetDropdown" class="multiDropdown"></div>
+          </div>
+          <div id="permissionSetPills"></div>
+        </div>
+   </td>
+   <td>&nbsp;
+   </td>
+   <td style="vertical-align: top;">
+        <div class="slds-form-element">
+          <label class="slds-form-element__label">&nbsp;</label>
+          <div class="slds-form-element__control" style="white-space: nowrap;">
+            <!-- shown only when a permission set is selected (updateButtons) -->
+            <span id="actionButtons" style="display: none; white-space: nowrap;">
+              <button id="addPsButton" class="slds-button slds-button_brand" onclick="javascript:startAction('add');">Add Permission Set</button>
+              <button id="deletePsButton" class="slds-button slds-button_destructive" onclick="javascript:startAction('delete');">Delete Permission Set</button>
+            </span>
+            <button id="summaryPsButton" class="slds-button slds-button_neutral" onclick="javascript:startSummary();">Permission Set Summary</button>
+          </div>
+        </div>
+   </td>
+   </tr>
+   </table>
+
+</div>
+<div class="slds-text-body_small" style="margin: 5px;">
+    Adds the permission sets to (or deletes them from) the users directly assigned to the public groups (nested groups and roles are not included)
+    OR the active users with the profiles OR the active users with the roles OR the selected users; nothing selected there: all active standard users.
+    The users in scope are shown for confirmation first.
+</div>
+
+<div id="divSummary" class="slds-text-body_regular" style="margin: 5px;"></div>
+  </div>
+
+  <!-- ************ Tab 2: Reversal ************ -->
+  <div id="reversal_tab" class="slds-tabs_default__content slds-hide" role="tabpanel" aria-labelledby="reversal_tabLink">
+    <div class="slds-m-top_xx-small">
+       <select id="reversalPeriod" class="slds-select" style="width: 140px;" onchange="refreshReversal();">
+         <option value="today" selected="selected">today</option>
+         <option value="last 3 days">last 3 days</option>
+         <option value="last week">last week</option>
+         <option value="last year">last year</option>
+         <option value="any time">any time</option>
+       </select>
+       <button class="slds-button slds-button_neutral" onclick="javascript:refreshReversal();">Refresh</button>
+       <button class="slds-button slds-button_neutral" onclick="javascript:selectAllReversal(true);">Select all</button>
+       <button class="slds-button slds-button_neutral" onclick="javascript:selectAllReversal(false);">Unselect all</button>
+       <button id="deleteButton" class="slds-button slds-button_destructive" onclick="javascript:deleteAssignments();">Delete assignment</button>
+       &nbsp;<span id="reversalCount" class="slds-text-body_regular"></span>
+    </div>
+    <div class="slds-text-body_small" style="margin: 5px;">
+        Permission set assignments you made in the selected period (from the setup audit trail, which keeps 180 days) that still exist.
+    </div>
+    <div id="reversalMessage" class="slds-text-body_regular" style="margin: 5px;"></div>
+    <div id="reversalTable" style="margin: 5px;"></div>
+  </div>
+</div>
+
+<!-- ************ Permission Set Summary: users x permission sets ************ -->
+<div id="summaryModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 9000;">
+    <div style="background: #fff; color: #000; width: 98%; margin: 1% auto; padding: 16px; border-radius: 8px;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.3); box-sizing: border-box;">
+        <div id="summaryBody" style="max-height: 80vh; overflow: auto;"></div>
+        <div style="text-align: right; margin-top: 12px;">
+            <button id="summaryDownloadButton" class="slds-button slds-button_neutral" onclick="javascript:downloadSummary();">Download</button>
+            <button class="slds-button slds-button_brand" onclick="javascript:closeSummary();">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- ************ Confirmation screen (Add / Delete Permission Set) ************ -->
+<div id="confirmModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 9000;">
+    <div style="background: #fff; color: #000; width: 98%; margin: 1% auto; padding: 16px; border-radius: 8px;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.3); box-sizing: border-box;">
+        <!-- a table wider than the screen scrolls horizontally inside the dialog -->
+        <div id="confirmBody" style="max-height: 80vh; overflow: auto;"></div>
+        <div style="text-align: right; margin-top: 12px;">
+            <button class="slds-button slds-button_neutral" onclick="javascript:cancelConfirm();">Cancel</button>
+            <button id="downloadButton" class="slds-button slds-button_neutral" onclick="javascript:downloadRows();">Download</button>
+            <button id="proceedButton" class="slds-button slds-button_brand" onclick="javascript:proceed();">Proceed</button>
+        </div>
+    </div>
+</div>
+
+<script>
+        loadLists();
+</script>
+
+</body>
+
+</apex:page>

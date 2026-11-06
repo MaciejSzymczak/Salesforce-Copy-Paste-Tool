@@ -105,6 +105,10 @@
         <viewAllRecords>true</viewAllRecords>
     </objectPermissions>
     <pageAccesses>
+        <apexPage>AddPermissionSetToPublicGroup</apexPage>
+        <enabled>true</enabled>
+    </pageAccesses>
+    <pageAccesses>
         <apexPage>BatchTraffic</apexPage>
         <enabled>true</enabled>
     </pageAccesses>
