@@ -10,7 +10,7 @@
      @author Maciej Szymczak, All rights reserved
      @version 2024.08  SetupAuditTrail, Create URL, flatView, Count
      @version 2026.07  Edit records, transpose, improved GUI, spiner, bugfixing
-     @version 2026.11  Flat view: select cells like in Excel and copy them with Ctrl+C
+     @version 2026.11  Flat view: select cells like in Excel and copy them with Ctrl+C, Show nulls, SOQL syntax highlighting
 -->
 
 <!-- DECLARATIONS START -->
@@ -1334,7 +1334,7 @@ Use this tool to visualise the json, for example this one:
     <div style="background:#fff; color:#000; max-width:360px; margin:10% auto; padding:24px; border-radius:8px; text-align:center; box-shadow:0 4px 20px rgba(0,0,0,0.3);" onclick="event.stopPropagation();">
         <h2 style="margin:0 0 8px;">SOQL Explorer</h2>
         <p style="margin:0 0 16px;">Powerful SOQL query editor and explorer</p>
-        <p style="margin:0;">Version 2026.07</p>
+        <p style="margin:0;">Version 2026.11</p>
         <p style="margin:0 0 16px;">&copy; 2026 Maciej Szymczak</p>
         <button class="slds-button slds-button_brand" onclick="javascript:hideAboutDialog();">Close</button>
     </div>
