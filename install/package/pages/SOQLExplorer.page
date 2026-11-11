@@ -10,6 +10,7 @@
      @author Maciej Szymczak, All rights reserved
      @version 2024.08  SetupAuditTrail, Create URL, flatView, Count
      @version 2026.07  Edit records, transpose, improved GUI, spiner, bugfixing
+     @version 2026.11  Flat view: select cells like in Excel and copy them with Ctrl+C
 -->
 
 <!-- DECLARATIONS START -->
@@ -52,6 +53,76 @@
 }
 .cellError {
     background-color: #ffd6d6 !important;
+}
+
+/* SOQL editor: the textarea text is transparent and the highlighted copy of it (#SOQLHighlight) is drawn behind it,
+   so both must have exactly the same text layout */
+#SOQLExpEditor {
+    position: relative;
+    background: #fff;
+}
+#SOQLExp, #SOQLHighlight {
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    font-weight: normal;
+    font-style: normal;
+    line-height: 18px;
+    letter-spacing: normal;
+    word-spacing: normal;
+    tab-size: 4;
+    padding: 6px 8px;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    word-break: normal;
+    box-sizing: border-box;
+}
+#SOQLExp {
+    position: relative;
+    z-index: 1;
+    display: block;
+    width: 100%;
+    margin: 0;
+    border: 1px solid #c9c9c9;
+    border-radius: 4px;
+    background: transparent;
+    color: transparent;
+    caret-color: #080707;
+    resize: vertical;
+}
+#SOQLExp:focus {
+    outline: none;
+    border-color: #1589ee;
+    box-shadow: 0 0 3px #0176d3;
+}
+#SOQLExp::selection {
+    background: rgba(21, 137, 238, 0.25);
+}
+#SOQLHighlightBox {
+    position: absolute;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+#SOQLHighlight {
+    margin: 0;
+    width: 100%;
+    border: 0;
+    background: transparent;
+    color: #080707;
+}
+.soqlKeyword  { color: #0000ff; }
+.soqlFunction { color: #795e26; }
+.soqlLiteral  { color: #af00db; }
+.soqlString   { color: #a31515; }
+.soqlNumber   { color: #098658; }
+.soqlComment  { color: #008000; }
+
+/* flat view: Excel-like cell selection */
+#selectableGrid td, #selectableGrid th {
+    cursor: cell;
+}
+#selectableGrid .cellSelected {
+    background-color: #cce4ff !important;
 }
 
 .qgList {
@@ -128,6 +199,27 @@
                     }
                 }
             }
+        }
+
+        //drop the columns that are NULL (or empty) in every record; the records are copied, not changed
+        function removeNullColumns(records) {
+            if (!Array.isArray(records) || records.length == 0 || typeof(records[0]) != 'object') return records;
+            var filled = {};
+            for (var i = 0; i < records.length; i++) {
+                for (var key in records[i]) {
+                    var value = records[i][key];
+                    if (value !== null && value !== undefined && value !== '') filled[key] = true;
+                }
+            }
+            var result = [];
+            for (var r = 0; r < records.length; r++) {
+                var row = {};
+                for (var k in records[r]) {
+                    if (filled[k]) row[k] = records[r][k];
+                }
+                result.push(row);
+            }
+            return result;
         }
 
         //swap rows and columns: one row per field, one column per record
@@ -362,6 +454,70 @@
     }
     */
     
+    //--- SOQL syntax highlighting of the editor ---
+
+    function wordSet(words) {
+        var set = {};
+        words.split(' ').forEach(function(w) { set[w] = true; });
+        return set;
+    }
+
+    var SOQL_KEYWORDS = wordSet('SELECT FROM WHERE AND OR NOT IN INCLUDES EXCLUDES LIKE ORDER BY GROUP HAVING LIMIT OFFSET '
+        + 'ASC DESC NULLS FIRST LAST WITH TYPEOF WHEN THEN ELSE END USING SCOPE FOR VIEW REFERENCE UPDATE TRACKING VIEWSTAT '
+        + 'ROLLUP CUBE SECURITY_ENFORCED USER_MODE SYSTEM_MODE DATA CATEGORY AT ABOVE BELOW ABOVE_OR_BELOW ALL ROWS');
+    var SOQL_FUNCTIONS = wordSet('COUNT COUNT_DISTINCT SUM AVG MIN MAX CALENDAR_MONTH CALENDAR_QUARTER CALENDAR_YEAR '
+        + 'DAY_IN_MONTH DAY_IN_WEEK DAY_IN_YEAR DAY_ONLY FISCAL_MONTH FISCAL_QUARTER FISCAL_YEAR HOUR_IN_DAY WEEK_IN_MONTH '
+        + 'WEEK_IN_YEAR FIELDS TOLABEL FORMAT CONVERTCURRENCY CONVERTTIMEZONE GROUPING DISTANCE GEOLOCATION');
+    //NULL, TRUE, FALSE and the date literals (TODAY, LAST_N_DAYS, THIS_FISCAL_YEAR, N_DAYS_AGO, ...)
+    var SOQL_LITERAL = /^(NULL|TRUE|FALSE|YESTERDAY|TODAY|TOMORROW|(LAST|THIS|NEXT)_(WEEK|MONTH|QUARTER|YEAR|FISCAL_QUARTER|FISCAL_YEAR)|(LAST|NEXT)_90_DAYS|(LAST|NEXT)_N_[A-Z_]+|N_[A-Z_]+_AGO)$/;
+
+    function escapeHtml(text) {
+        //[<] instead of a bare < so the Visualforce parser does not read "</g" as a closing tag
+        return text.replace(/&/g, '&amp;').replace(/[<]/g, '&lt;').replace(/[>]/g, '&gt;');
+    }
+
+    function highlightSOQL(text) {
+        //1: --comment to the end of the line, 2: 'string', 3: number, 4: word
+        var token = /(--[^\n]*)|('(?:\\.|[^'\\\n])*'?)|(\b\d+(?:\.\d+)?\b)|([A-Za-z_]\w*)/g;
+        var html = '';
+        var last = 0;
+        var m;
+        while ((m = token.exec(text)) !== null) {
+            html += escapeHtml(text.substring(last, m.index));
+            last = token.lastIndex;
+            var cls = null;
+            if (m[1]) cls = 'soqlComment';
+            else if (m[2]) cls = 'soqlString';
+            else if (m[3]) cls = 'soqlNumber';
+            else {
+                var word = m[4].toUpperCase();
+                if (SOQL_LITERAL.test(word)) cls = 'soqlLiteral';
+                else if (SOQL_KEYWORDS[word]) cls = 'soqlKeyword';
+                else if (SOQL_FUNCTIONS[word] && /^\s*\(/.test(text.substring(last, last + 20))) cls = 'soqlFunction';
+            }
+            html += cls ? '<span class="' + cls + '">' + escapeHtml(m[0]) + '</span>' : escapeHtml(m[0]);
+        }
+        //the trailing newline keeps an empty last line as high as in the textarea
+        return html + escapeHtml(text.substring(last)) + '\n';
+    }
+
+    //re-renders the highlighted copy; call it whenever the textarea value is changed from code
+    function refreshSOQLHighlight() {
+        document.getElementById('SOQLHighlight').innerHTML = highlightSOQL(document.getElementById('SOQLExp').value);
+        syncSOQLHighlight();
+    }
+
+    //keeps the highlighted copy over the textarea content area (without its border and scrollbars) and scrolled like it
+    function syncSOQLHighlight() {
+        var textarea = document.getElementById('SOQLExp');
+        var box = document.getElementById('SOQLHighlightBox');
+        box.style.top = (textarea.offsetTop + textarea.clientTop) + 'px';
+        box.style.left = (textarea.offsetLeft + textarea.clientLeft) + 'px';
+        box.style.width = textarea.clientWidth + 'px';
+        box.style.height = textarea.clientHeight + 'px';
+        document.getElementById('SOQLHighlight').style.transform = 'translate(' + (-textarea.scrollLeft) + 'px,' + (-textarea.scrollTop) + 'px)';
+    }
+
     //textArea functions. source: http://help.dottoro.com/ljtfkhio.php
     function GetSelection (textareaId) {
         var selection = "";
@@ -413,6 +569,7 @@
                 textarea.value = newText;
             }
         }
+        refreshSOQLHighlight();
     }
 
     </script>
@@ -467,7 +624,7 @@
         }
 
         function generateURL(textareaId) {
-                var URL = '/apex/SOQLExplorer?header=Report&q='+encodeURIComponent(GetSelection(textareaId))+'&flatView='+(document.getElementById('flatView').checked?'true':'false');
+                var URL = '/apex/SOQLExplorer?header=Report&q='+encodeURIComponent(GetSelection(textareaId))+'&flatView='+(document.getElementById('flatView').checked?'true':'false')+'&showNulls='+(document.getElementById('showNulls').checked?'true':'false');
                 window.open(URL);
         }
 
@@ -487,14 +644,18 @@
         function refreshResultView() {
             if (!lastRecordset) return;
             resetGridEdits();
+            clearGridSelection();
             var flatView = document.getElementById('flatView').checked;
             var transposeView = document.getElementById('transposeView').checked;
             var dataForTable = flatView ? flattenJSON(lastRecordset) : lastRecordset;
+            if (!document.getElementById('showNulls').checked) {
+                dataForTable = removeNullColumns(dataForTable);
+            }
             if (transposeView) {
                 dataForTable = transposeRecordset(dataForTable);
             }
             var editable = !flatView && !transposeView && !lastQueryWasTooling;
-            var data = ConvertJsonToTable(dataForTable, '', '', '', false, false, editable);
+            var data = ConvertJsonToTable(dataForTable, flatView ? 'selectableGrid' : '', '', '', false, false, editable);
             document.getElementById('divDescribeGlobal').innerHTML = data + '<br/>Count:' + lastRecordset.length;
         }
 
@@ -631,6 +792,122 @@
             }
         }
 
+        //--- Excel-like cell selection (flat view only): click/drag selects cells, Shift+click extends the selection,
+        //    a header click selects whole columns, Ctrl+C copies the selection as tab separated text (pastes into Excel) ---
+
+        //row -1 is the header row; when the anchor or the focus is on the header, whole columns are selected
+        var gridSelection = null;
+        var gridSelecting = false;
+
+        function selectableGrid() {
+            return document.getElementById('selectableGrid');
+        }
+
+        function gridCellAt(event) {
+            var grid = selectableGrid();
+            var cell = (grid && event.target.closest) ? event.target.closest('td, th') : null;
+            if (!cell || cell.closest('table') !== grid) return null;
+            return { row: cell.parentNode.parentNode.tagName == 'THEAD' ? -1 : cell.parentNode.sectionRowIndex, col: cell.cellIndex };
+        }
+
+        function gridSelectionRect(grid) {
+            var s = gridSelection;
+            var columnMode = s.anchorRow == -1 || s.focusRow == -1;
+            return {
+                r1: columnMode ? -1 : Math.min(s.anchorRow, s.focusRow),
+                r2: columnMode ? grid.tBodies[0].rows.length - 1 : Math.max(s.anchorRow, s.focusRow),
+                c1: Math.min(s.anchorCol, s.focusCol),
+                c2: Math.max(s.anchorCol, s.focusCol)
+            };
+        }
+
+        function gridRow(grid, r) {
+            return r == -1 ? grid.tHead.rows[0] : grid.tBodies[0].rows[r];
+        }
+
+        function paintGridSelection() {
+            var selected = document.querySelectorAll('.cellSelected');
+            for (var i = 0; i < selected.length; i++) selected[i].classList.remove('cellSelected');
+            var grid = selectableGrid();
+            if (!grid || !gridSelection) return;
+            var rect = gridSelectionRect(grid);
+            for (var r = rect.r1; r <= rect.r2; r++) {
+                var tr = gridRow(grid, r);
+                for (var c = rect.c1; c <= rect.c2; c++) {
+                    if (tr && tr.cells[c]) tr.cells[c].classList.add('cellSelected');
+                }
+            }
+        }
+
+        function clearGridSelection() {
+            gridSelection = null;
+            gridSelecting = false;
+            paintGridSelection();
+        }
+
+        function gridCellValue(cell) {
+            //NULL values are rendered as <i>NULL</i> - copy them as empty cells
+            if (cell.firstChild && cell.firstChild.tagName == 'I' && cell.textContent == 'NULL') return '';
+            var text = cell.textContent;
+            //quote like Excel does when the value has a tab, a line break or a quote
+            if (/[\t\r\n"]/.test(text)) text = '"' + text.replace(/"/g, '""') + '"';
+            return text;
+        }
+
+        function gridSelectionText(grid) {
+            var rect = gridSelectionRect(grid);
+            var lines = [];
+            for (var r = rect.r1; r <= rect.r2; r++) {
+                var tr = gridRow(grid, r);
+                var values = [];
+                for (var c = rect.c1; c <= rect.c2; c++) {
+                    values.push(tr && tr.cells[c] ? gridCellValue(tr.cells[c]) : '');
+                }
+                lines.push(values.join('\t'));
+            }
+            return lines.join('\r\n');
+        }
+
+        function handleGridMouseDown(event) {
+            if (event.button != 0) return;
+            var pos = gridCellAt(event);
+            if (!pos) {
+                if (gridSelection) clearGridSelection();
+                return;
+            }
+            if (event.target.closest('a')) return; //let links open
+            if (event.shiftKey && gridSelection) {
+                gridSelection.focusRow = pos.row;
+                gridSelection.focusCol = pos.col;
+            } else {
+                gridSelection = { anchorRow: pos.row, anchorCol: pos.col, focusRow: pos.row, focusCol: pos.col };
+            }
+            gridSelecting = true;
+            //no text selection while dragging; move the focus away from the SOQL textarea so Ctrl+C copies the cells
+            event.preventDefault();
+            if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+            if (window.getSelection) window.getSelection().removeAllRanges();
+            paintGridSelection();
+        }
+
+        function handleGridMouseOver(event) {
+            if (!gridSelecting || !gridSelection) return;
+            var pos = gridCellAt(event);
+            if (!pos || (pos.row == gridSelection.focusRow && pos.col == gridSelection.focusCol)) return;
+            gridSelection.focusRow = pos.row;
+            gridSelection.focusCol = pos.col;
+            paintGridSelection();
+        }
+
+        function handleGridCopy(event) {
+            var grid = selectableGrid();
+            if (!grid || !gridSelection) return;
+            var active = document.activeElement;
+            if (active && (active.tagName == 'TEXTAREA' || active.tagName == 'INPUT' || active.tagName == 'SELECT')) return;
+            event.clipboardData.setData('text/plain', gridSelectionText(grid));
+            event.preventDefault();
+        }
+
         function deleteRecord(id, type) {
             if (!confirm('Delete this ' + type + ' record (' + id + ')? This cannot be undone.')) return;
             showSpinner();
@@ -720,14 +997,18 @@
                 }
                 if (pfieldSeparator=='nodownload') {
                     resetGridEdits();
+                    clearGridSelection();
                     var flatView = document.getElementById('flatView').checked;
                     var transposeView = document.getElementById('transposeView').checked;
                     var dataForTable = flatView ? flattenJSON(recordset) : recordset;
+                    if (!document.getElementById('showNulls').checked) {
+                        dataForTable = removeNullColumns(dataForTable);
+                    }
                     if (transposeView) {
                         dataForTable = transposeRecordset(dataForTable);
                     }
                     var editableGrid = !flatView && !transposeView && !toolingApi;
-                    data = ConvertJsonToTable ( dataForTable, '', '', '', false, false, editableGrid );
+                    data = ConvertJsonToTable ( dataForTable, flatView ? 'selectableGrid' : '', '', '', false, false, editableGrid );
                 }
 
                 if (pfieldSeparator!='nodownload') {
@@ -866,9 +1147,10 @@
 
         //unhides the SOQL textarea/toolbar when the page was opened with a 'header' param (which hides them)
         function showQueryEditor() {
-            document.getElementById('SOQLExp').style.display = '';
+            document.getElementById('SOQLExpEditor').style.display = '';
             document.getElementById('wrapper').style.display = '';
             document.getElementById('editButton').style.display = 'none';
+            syncSOQLHighlight();
         }
 
 function executeSelect() {
@@ -926,7 +1208,9 @@ function moreActions() {
       </span>
     </div>
     
-<textarea class="slds-textarea" Id="SOQLExp" rows="10" cols="80" style="width:100%; font-family:'Courier New'">
+<div id="SOQLExpEditor">
+<div id="SOQLHighlightBox"><pre id="SOQLHighlight" aria-hidden="true"></pre></div>
+<textarea Id="SOQLExp" rows="10" cols="80" spellcheck="false" oninput="refreshSOQLHighlight();" onscroll="syncSOQLHighlight();">
 Select the query and hit the button Run. The wildcard * is supported!
 
 select * from RecordType order by CreatedDate desc limit 1000
@@ -961,6 +1245,7 @@ SELECT Id,TargetObjectid, Status,(select id,actor.name from Workitems),(SELECT I
 Use this tool to visualise the json, for example this one:
 {"glossary": {"title": "example glossary","GlossDiv": {"title": "S","GlossList": {"GlossEntry": {"ID": "SGML","SortAs": "SGML","GlossTerm": "Standard Generalized Markup Language","Acronym": "SGML","Abbrev": "ISO 8879:1986","GlossDef": {"para": "A meta-markup language, used to create markup languages such as DocBook.","GlossSeeAlso": ["GML", "XML"]},"GlossSee": "markup"}}}}}
 </textarea>
+</div>
 <br></br>
 
 <div id="wrapper" class="slds-m-top_xx-small" >
@@ -989,6 +1274,10 @@ Use this tool to visualise the json, for example this one:
                 <span style="display:block;">
                     <input type="checkbox" id="toolingApi" name="toolingApi" value="Yes"/>
                     <label for="toolingApi" title="Query via the Tooling API (e.g. ApexClass, ApexTrigger) instead of the standard API">Tooling API</label>
+                </span>
+                <span style="display:block;">
+                    <input type="checkbox" id="showNulls" name="showNulls" value="Yes" onclick="javascript:refreshResultView();"/>
+                    <label for="showNulls" title="When not selected, the columns that are NULL in every record are hidden">Show nulls</label>
                 </span>
             </span>
         </fieldset>
@@ -1065,6 +1354,7 @@ Use this tool to visualise the json, for example this one:
             <li class="qgItem"><span class="qgBullet">&#10003;</span><span>Rapid report creation for ad hoc business analysis</span></li>
             <li class="qgItem"><span class="qgBullet">&#10003;</span><span>Edit and delete records. Permissions granted to user are respected</span></li>
             <li class="qgItem"><span class="qgBullet">&#10003;</span><span>Transpose query results for an easy single-record view</span></li>
+            <li class="qgItem"><span class="qgBullet">&#10003;</span><span>Flat view: select cells or whole columns like in Excel and copy them with Ctrl+C</span></li>
             <li class="qgItem"><span class="qgBullet">&#10003;</span><span>View and export results as Table, Excel, CSV, or JSON</span></li>
             <li class="qgItem"><span class="qgBullet">&#10003;</span><span>Object Explorer for browsing Salesforce metadata</span></li>
             <li class="qgItem"><span class="qgBullet">&#10003;</span><span>JSON formatting and visualization</span></li>
@@ -1097,6 +1387,11 @@ Use this tool to visualise the json, for example this one:
 
 <script>
     document.getElementById('divDescribeGlobal').addEventListener('input', handleCellEdit);
+    document.addEventListener('mousedown', handleGridMouseDown);
+    document.addEventListener('mouseover', handleGridMouseOver);
+    document.addEventListener('mouseup', function() { gridSelecting = false; });
+    document.addEventListener('copy', handleGridCopy);
+    document.addEventListener('keydown', function(event) { if (event.key == 'Escape' && gridSelection) clearGridSelection(); });
 
     var url_string = window.location.href;
     var url = new URL(url_string);
@@ -1105,13 +1400,20 @@ Use this tool to visualise the json, for example this one:
     var header = url.searchParams.get("header");
     if (flatView != null) {
         document.getElementById('flatView').checked = (flatView=='true');
-    } 
+    }
+    var showNulls = url.searchParams.get("showNulls");
+    if (showNulls != null) {
+        document.getElementById('showNulls').checked = (showNulls=='true');
+    }
     if (q != null) {
         document.getElementById('SOQLExp').value = q;
         downloadMySOQL('SOQLExp','nodownload');
-    } 
+    }
+    refreshSOQLHighlight();
+    if (window.ResizeObserver) new ResizeObserver(syncSOQLHighlight).observe(document.getElementById('SOQLExp'));
+    window.addEventListener('resize', syncSOQLHighlight);
     if (header != null) {
-        document.getElementById('SOQLExp').style.display="none";
+        document.getElementById('SOQLExpEditor').style.display="none";
         document.getElementById('wrapper').style.display="none";
         document.getElementById('headerText').innerHTML = header;
         document.getElementById('editButton').style.display = "inline-block";
