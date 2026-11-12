@@ -10,7 +10,7 @@
      @author Maciej Szymczak, All rights reserved
      @version 2024.08  SetupAuditTrail, Create URL, flatView, Count
      @version 2026.07  Edit records, transpose, improved GUI, spiner, bugfixing
-     @version 2026.11  Flat view: select cells like in Excel and copy them with Ctrl+C, Show nulls, SOQL syntax highlighting
+     @version 2026.11  Flat view: select cells like in Excel and copy them with Ctrl+C, Show nulls, SOQL syntax highlighting, Execute Apex
 -->
 
 <!-- DECLARATIONS START -->
@@ -464,7 +464,8 @@
 
     var SOQL_KEYWORDS = wordSet('SELECT FROM WHERE AND OR NOT IN INCLUDES EXCLUDES LIKE ORDER BY GROUP HAVING LIMIT OFFSET '
         + 'ASC DESC NULLS FIRST LAST WITH TYPEOF WHEN THEN ELSE END USING SCOPE FOR VIEW REFERENCE UPDATE TRACKING VIEWSTAT '
-        + 'ROLLUP CUBE SECURITY_ENFORCED USER_MODE SYSTEM_MODE DATA CATEGORY AT ABOVE BELOW ABOVE_OR_BELOW ALL ROWS');
+        + 'ROLLUP CUBE SECURITY_ENFORCED USER_MODE SYSTEM_MODE DATA CATEGORY AT ABOVE BELOW ABOVE_OR_BELOW ALL ROWS '
+        + 'INSERT DELETE UPSERT UNDELETE MERGE'); //Apex DML for Execute Apex
     var SOQL_FUNCTIONS = wordSet('COUNT COUNT_DISTINCT SUM AVG MIN MAX CALENDAR_MONTH CALENDAR_QUARTER CALENDAR_YEAR '
         + 'DAY_IN_MONTH DAY_IN_WEEK DAY_IN_YEAR DAY_ONLY FISCAL_MONTH FISCAL_QUARTER FISCAL_YEAR HOUR_IN_DAY WEEK_IN_MONTH '
         + 'WEEK_IN_YEAR FIELDS TOLABEL FORMAT CONVERTCURRENCY CONVERTTIMEZONE GROUPING DISTANCE GEOLOCATION');
@@ -908,6 +909,98 @@
             event.preventDefault();
         }
 
+        //--- anonymous Apex: executeAnonymous of the SOAP Apex API, called like connection.js calls the SOAP API (no Apex controller) ---
+
+        //builds an XML element; the tags are concatenated so the Visualforce parser does not read them as markup
+        function xmlElement(name, content, attributes) {
+            return '<' + name + (attributes ? ' ' + attributes : '') + '>' + content + '<' + '/' + name + '>';
+        }
+
+        function xmlValue(doc, name) {
+            var nodes = doc.getElementsByTagNameNS('*', name);
+            return nodes.length ? nodes[0].textContent : '';
+        }
+
+        //text that is not JSON, not a SOQL query and not a record Id is anonymous Apex
+        function isApexCode(text) {
+            text = text.trim();
+            var isJson = text[0] == '[' || text[0] == '{';
+            var isSoql = text.toLowerCase().startsWith('select');
+            return text != '' && !isJson && !isSoql && !isSalesforceId(text);
+        }
+
+        //Run: the selection is executed as anonymous Apex when it is not JSON, a SOQL query or a record Id
+        function RunClick(textareaId) {
+            if (isApexCode(GetSelection(textareaId))) {
+                ExecuteApexClick(textareaId);
+            } else {
+                downloadMySOQL(textareaId, 'nodownload');
+            }
+        }
+
+        //executes the selected code (the whole editor when nothing is selected), like Run
+        function ExecuteApexClick(textareaId) {
+            executeAnonymousApex(GetSelection(textareaId));
+        }
+
+        function executeAnonymousApex(code) {
+            var apexNs = 'xmlns="http://soap.sforce.com/2006/08/apex"';
+            var envelope = xmlElement('soapenv:Envelope',
+                xmlElement('soapenv:Header',
+                    xmlElement('DebuggingHeader',
+                        xmlElement('categories', xmlElement('category', 'Apex_code') + xmlElement('level', 'DEBUG'))
+                        + xmlElement('debugLevel', 'DEBUGONLY'), apexNs)
+                    + xmlElement('SessionHeader', xmlElement('sessionId', sforce.connection.sessionId), apexNs))
+                + xmlElement('soapenv:Body',
+                    xmlElement('executeAnonymous', xmlElement('String', escapeHtml(code)), apexNs)),
+                'xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"');
+
+            showSpinner();
+            fetch('/services/Soap/s/60.0', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/xml; charset=UTF-8', 'SOAPAction': '""' },
+                    body: envelope
+                })
+                .then(function(response) { return response.text(); })
+                .then(function(text) { showApexResult(new DOMParser().parseFromString(text, 'text/xml')); })
+                .catch(function(err) {
+                    document.getElementById('divDescribeGlobal').innerHTML = escapeHtml('Execute Apex failed: ' + err);
+                })
+                .finally(function() {
+                    hideSpinner();
+                });
+        }
+
+        function showApexResult(doc) {
+            var html;
+            var fault = xmlValue(doc, 'faultstring');
+            if (fault) {
+                html = '<p style="color:#b00020;">' + escapeHtml(fault) + '</p>';
+            } else if (xmlValue(doc, 'compiled') != 'true') {
+                //line/column count from the first line of the selected code
+                html = '<p style="color:#b00020;">Compile error at line ' + xmlValue(doc, 'line') + ', column ' + xmlValue(doc, 'column')
+                    + ': ' + escapeHtml(xmlValue(doc, 'compileProblem')) + '</p>';
+            } else if (xmlValue(doc, 'success') != 'true') {
+                html = '<p style="color:#b00020;">' + escapeHtml(xmlValue(doc, 'exceptionMessage')) + '</p>'
+                    + '<pre>' + escapeHtml(xmlValue(doc, 'exceptionStackTrace')) + '</pre>';
+            } else {
+                html = '<p style="color:#2e844a;">Executed successfully.</p>';
+            }
+            var log = xmlValue(doc, 'debugLog');
+            if (log) {
+                var debugLines = log.split('\n').filter(function(line) { return line.indexOf('|USER_DEBUG|') != -1; });
+                if (debugLines.length) {
+                    html += '<p style="margin-top:8px;"><b>System.debug</b></p><pre>' + escapeHtml(debugLines.join('\n')) + '</pre>';
+                }
+                html += '<details style="margin-top:8px;"><summary>Debug log</summary><pre>' + escapeHtml(log) + '</pre></details>';
+            }
+            //the result is not a recordset: Flat view/Transpose/Show nulls must not re-render the previous query over it
+            lastRecordset = null;
+            resetGridEdits();
+            clearGridSelection();
+            document.getElementById('divDescribeGlobal').innerHTML = html;
+        }
+
         function deleteRecord(id, type) {
             if (!confirm('Delete this ' + type + ' record (' + id + ')? This cannot be undone.')) return;
             showSpinner();
@@ -1222,6 +1315,9 @@ select Id, FirstName, LastName, (select Id from Tasks), account.owner.Name from 
 --New accounts Y2Y
 Select count(Id) Accounts, Calendar_Year(CreatedDate) Yearly from Account where CreatedDate = last_n_days:1500 group by Calendar_Year(CreatedDate) order by Calendar_Year(CreatedDate)
 
+--Select this line and click button Run
+system.debug('Testing apex execution:' + [select Id from Account limit 1]);
+
 --Accounts by Owners
 Select count(Id) Accounts, OwnerId, Owner.IsActive, Owner.Name, Owner.Profile.Name Profile from Account group by OwnerId, Owner.IsActive, Owner.Name, Owner.Profile.Name order by count(Id) desc
 
@@ -1252,8 +1348,11 @@ Use this tool to visualise the json, for example this one:
 
         <div style="display:flex; align-items:stretch; flex-wrap:wrap; gap:8px;">
         <fieldset style="display:inline-block; vertical-align:top; border:1px solid #d8dde6; margin:0; padding:2px 8px;">
-            <legend style="padding:0 4px; font-size:0.75rem;">Execute SOQL</legend>
-            <button class="slds-button slds-button_brand" onclick="javascript:downloadMySOQL('SOQLExp','nodownload');">Run</button>
+            <legend style="padding:0 4px; font-size:0.75rem;">Execute SOQL / Apex</legend>
+            <span style="display:inline-flex; flex-direction:column; row-gap:2px; vertical-align:top;">
+                <button class="slds-button slds-button_brand" title="Run the selected SOQL query (anything else that is not JSON or a record Id is executed as Apex)" onclick="javascript:RunClick('SOQLExp');">Run</button>
+                <button class="slds-button slds-button_neutral" style="margin-left:0;" title="Execute the selected anonymous Apex code" onclick="javascript:ExecuteApexClick('SOQLExp');">Execute Apex</button>
+            </span>
             <select id="moreActions" onchange="moreActions()">
              <option value="--more--">More</option>
              <option value="Download (csv)">Download (csv)</option>
@@ -1351,6 +1450,7 @@ Use this tool to visualise the json, for example this one:
             <li class="qgItem"><span class="qgBullet">&#10003;</span><span>Support for nested queries with both hierarchical and flat views</span></li>
             <li class="qgItem"><span class="qgBullet">&#10003;</span><span>Library of ready-to-use SOQL examples</span></li>
             <li class="qgItem"><span class="qgBullet">&#10003;</span><span>Tooling API</span></li>
+            <li class="qgItem"><span class="qgBullet">&#10003;</span><span>Execute anonymous Apex: select the code and click Run or Execute Apex (System.debug output and the debug log are shown)</span></li>
             <li class="qgItem"><span class="qgBullet">&#10003;</span><span>Rapid report creation for ad hoc business analysis</span></li>
             <li class="qgItem"><span class="qgBullet">&#10003;</span><span>Edit and delete records. Permissions granted to user are respected</span></li>
             <li class="qgItem"><span class="qgBullet">&#10003;</span><span>Transpose query results for an easy single-record view</span></li>
@@ -1407,7 +1507,13 @@ Use this tool to visualise the json, for example this one:
     }
     if (q != null) {
         document.getElementById('SOQLExp').value = q;
-        downloadMySOQL('SOQLExp','nodownload');
+        //a link must never execute code: Apex in the URL is shown, not executed
+        if (isApexCode(q)) {
+            document.getElementById('divDescribeGlobal').innerHTML =
+                '<p style="color:#b00020;">Apex code is not allowed as parameter. Only a SOQL query or JSON can be passed in the URL (parameter q).</p>';
+        } else {
+            downloadMySOQL('SOQLExp','nodownload');
+        }
     }
     refreshSOQLHighlight();
     if (window.ResizeObserver) new ResizeObserver(syncSOQLHighlight).observe(document.getElementById('SOQLExp'));
